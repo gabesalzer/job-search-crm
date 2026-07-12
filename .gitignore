@@ -1,0 +1,26 @@
+# --- Secrets & local config ---
+.env
+*.env
+!.env.example
+
+# --- Local data (never commit real job-search data) ---
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+*.db-journal
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/

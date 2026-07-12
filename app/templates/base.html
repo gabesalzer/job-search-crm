@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Job Search CRM{% endblock %}</title>
+<style>
+  :root{
+    --bg:#fafafa; --panel:#ffffff; --ink:#18181b; --muted:#6b7280; --line:#e5e7eb;
+    --accent:#2456e6; --up:#0a7d33; --down:#c02626; --neutral:#9ca3af; --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       background:var(--bg);color:var(--ink);line-height:1.45;font-size:14px}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  header.topbar{display:flex;align-items:center;gap:1.6rem;padding:0.85rem 1.4rem;
+    background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .brand{font-weight:650} .brand .dot{color:var(--accent)}
+  header.topbar nav{display:flex;gap:1.2rem}
+  header.topbar nav a{color:var(--muted);padding:0.2rem 0}
+  header.topbar nav a.active{color:var(--ink);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
+  main{padding:1.6rem 1.4rem;max-width:1440px;margin:0 auto}
+  h1{font-size:1.3rem;margin:0 0 0.2rem} .subtitle{color:var(--muted);margin:0 0 1.3rem}
+  .btn{display:inline-block;background:var(--accent);color:#fff;border:none;border-radius:8px;
+    padding:0.5rem 0.9rem;font-size:0.86rem;cursor:pointer;font-family:inherit}
+  .btn:hover{opacity:0.93} .btn.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  input,select,textarea{font:inherit;font-size:0.86rem;padding:0.48rem 0.6rem;border:1px solid var(--line);
+    border-radius:8px;background:#fff;color:var(--ink);width:100%}
+  label{display:block;font-size:0.76rem;color:var(--muted);margin-bottom:0.22rem}
+  .field{margin-bottom:0.2rem}
+  details.newform{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:0.4rem 1rem;margin-bottom:1.3rem}
+  details.newform summary{cursor:pointer;font-weight:550;padding:0.5rem 0;list-style:none}
+  details.newform summary::-webkit-details-marker{display:none}
+  details.newform summary::before{content:"+ ";color:var(--accent);font-weight:700}
+  details.newform[open] summary::before{content:"– "}
+  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.7rem;
+    align-items:end;padding:0.4rem 0 0.9rem}
+  .board{display:flex;gap:0.85rem;overflow-x:auto;padding-bottom:1rem}
+  .col{flex:0 0 248px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    display:flex;flex-direction:column;max-height:calc(100vh - 230px)}
+  .col h2{font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);
+    margin:0;padding:0.7rem 0.8rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+  .col .count{color:var(--neutral)}
+  .col .cards{padding:0.55rem;overflow-y:auto;flex:1;min-height:48px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:0.6rem 0.65rem;
+    margin-bottom:0.5rem;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+  .card:active{cursor:grabbing}
+  .card .title{font-weight:600;margin-bottom:0.12rem}
+  .card .co{color:var(--muted);font-size:0.82rem}
+  .card .metarow{margin-top:0.45rem;display:flex;gap:0.3rem;flex-wrap:wrap}
+  .col.over{background:#f0f4ff;outline:2px dashed var(--accent);outline-offset:-4px}
+  .empty{color:var(--neutral);text-align:center;padding:1rem 0.4rem;font-size:0.82rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0.9rem}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:0.9rem 1rem}
+  .pill{display:inline-block;font-size:0.7rem;padding:0.1rem 0.5rem;border-radius:999px;
+    border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .pill.up{color:var(--up);border-color:#bfe6c9;background:#f0faf3}
+  .pill.down{color:var(--down);border-color:#f2c9c9;background:#fdf1f1}
+  .tag{font-size:0.7rem;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:0.04rem 0.4rem}
+  .rating-row{display:flex;gap:0.35rem;margin-top:0.6rem;align-items:center}
+  .ratebtn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:0.28rem 0.55rem;
+    cursor:pointer;font-size:0.9rem;line-height:1;font-family:inherit}
+  .ratebtn.up:hover{border-color:var(--up);color:var(--up)}
+  .ratebtn.down:hover{border-color:var(--down);color:var(--down)}
+  .ratebtn.neutral:hover{border-color:var(--neutral)}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">Job Search CRM<span class="dot">.</span></span>
+  <nav>
+    <a href="/board" class="{% if active=='board' %}active{% endif %}">Pipeline</a>
+    <a href="/postings" class="{% if active=='postings' %}active{% endif %}">Postings</a>
+    <a href="/companies" class="{% if active=='companies' %}active{% endif %}">Companies</a>
+  </nav>
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

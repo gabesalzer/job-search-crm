@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Pipeline · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Pipeline</h1>
+<p class="subtitle">Drag an application between stages — every move is logged to its stage history.</p>
+
+<details class="newform">
+  <summary>New application</summary>
+  {% if companies %}
+  <form method="post" action="/ui/applications" id="newAppForm">
+    <div class="form-grid">
+      <div class="field">
+        <label>From posting</label>
+        <select name="job_posting_id" id="appPosting">
+          <option value="">— none —</option>
+          {% for p in postings %}
+          <option value="{{ p.id }}" data-company="{{ p.company_id }}" data-title="{{ p.title }}">
+            {{ p.title }} — {{ p.company.name if p.company else "?" }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Company</label>
+        <select name="company_id" id="appCompany" required>
+          {% for c in companies %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Role title</label>
+        <input name="title" id="appTitle" placeholder="Sr. RevOps Manager">
+      </div>
+      <div class="field">
+        <label>Stage</label>
+        <select name="stage">
+          {% for s in stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Resume</label>
+        <select name="resume_id">
+          <option value="">—</option>
+          {% for r in resumes %}<option value="{{ r.id }}">{{ r.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field"><button class="btn" type="submit">Add</button></div>
+    </div>
+  </form>
+  {% else %}
+  <p class="empty">Add a company first on the <a href="/companies">Companies</a> tab, then you can create applications.</p>
+  {% endif %}
+</details>
+
+<div class="board">
+  {% for stage in stages %}
+  <div class="col dropzone" data-stage="{{ stage }}">
+    <h2>{{ stage }} <span class="count">{{ grouped[stage]|length }}</span></h2>
+    <div class="cards">
+      {% for app in grouped[stage] %}
+      <div class="card" draggable="true" data-id="{{ app.id }}">
+        <div class="title">{{ app.title or "Untitled role" }}</div>
+        <div class="co">{{ app.company.name if app.company else "—" }}</div>
+        <div class="metarow">
+          {% if app.resume %}<span class="tag">{{ app.resume.label }}</span>{% endif %}
+          {% if app.lost_reason %}<span class="tag">{{ app.lost_reason.value }}</span>{% endif %}
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">—</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Picking a posting auto-fills the company and role title from it.
+  const appPosting = document.getElementById('appPosting');
+  if (appPosting) {
+    appPosting.addEventListener('change', () => {
+      const opt = appPosting.selectedOptions[0];
+      if (!opt || !opt.value) return;
+      const companyId = opt.getAttribute('data-company');
+      const title = opt.getAttribute('data-title');
+      const companySel = document.getElementById('appCompany');
+      const titleInput = document.getElementById('appTitle');
+      if (companyId) companySel.value = companyId;
+      if (title && !titleInput.value) titleInput.value = title;
+    });
+  }
+
+  let draggingId = null;
+  document.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('dragstart', () => { draggingId = card.dataset.id; card.style.opacity = '0.5'; });
+    card.addEventListener('dragend', () => { card.style.opacity = '1'; });
+  });
+  document.querySelectorAll('.dropzone').forEach(col => {
+    col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+    col.addEventListener('dragleave', () => col.classList.remove('over'));
+    col.addEventListener('drop', async e => {
+      e.preventDefault();
+      col.classList.remove('over');
+      if (!draggingId) return;
+      const stage = col.dataset.stage;
+      const res = await fetch(`/api/applications/${draggingId}/stage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage })
+      });
+      if (res.ok) { location.reload(); }
+      else { alert('Could not move that card — see the server log.'); }
+    });
+  });
+</script>
+{% endblock %}

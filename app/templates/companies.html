@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Companies · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Companies</h1>
+<p class="subtitle">Employers and staffing agencies. The type matters for later reporting (which employers vs. which agencies get you traction).</p>
+
+<details class="newform" {% if not companies %}open{% endif %}>
+  <summary>New company</summary>
+  <form method="post" action="/ui/companies">
+    <div class="form-grid">
+      <div class="field"><label>Name</label><input name="name" required></div>
+      <div class="field">
+        <label>Type</label>
+        <select name="company_type">
+          {% for t in company_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Website</label><input name="website" placeholder="https://"></div>
+      <div class="field"><label>Industry</label><input name="industry"></div>
+      <div class="field"><button class="btn" type="submit">Add</button></div>
+    </div>
+  </form>
+</details>
+
+{% if companies %}
+<div class="grid">
+  {% for c in companies %}
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
+      <strong>{{ c.name }}</strong>
+      <span class="pill">{{ c.company_type.value }}</span>
+    </div>
+    <div style="color:var(--muted);font-size:0.82rem;margin-top:0.35rem">
+      {% if c.website %}<a href="{{ c.website }}" target="_blank" rel="noopener">{{ c.website }}</a><br>{% endif %}
+      {{ c.industry or "" }}
+    </div>
+    <div style="font-size:0.76rem;color:var(--neutral);margin-top:0.55rem">
+      {{ c.applications|length }} application(s) · {{ c.postings|length }} posting(s) · {{ c.people|length }} contact(s)
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No companies yet — add one above to get started.</p>
+{% endif %}
+{% endblock %}

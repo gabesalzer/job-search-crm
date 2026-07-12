@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Postings · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Postings</h1>
+<p class="subtitle">Rate postings up / neutral / down to teach the app what you're looking for. (Firecrawl ingestion is coming; add manually for now.)</p>
+
+<details class="newform">
+  <summary>New posting</summary>
+  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.3rem 0 0.2rem">
+    <input id="importUrl" placeholder="Paste a job posting URL (company page, Greenhouse, Lever, Ashby)…"
+           style="flex:1;min-width:240px">
+    <button type="button" class="btn secondary" id="importBtn">Fetch details</button>
+  </div>
+  <div id="importStatus" style="font-size:0.8rem;color:var(--muted);min-height:1.1em;margin:0.2rem 0 0.7rem"></div>
+
+  <form method="post" action="/ui/postings" id="newPostingForm">
+    <div class="form-grid">
+      <div class="field">
+        <label>Company</label>
+        <input name="company_name" list="companyList" placeholder="Company name" required autocomplete="off">
+        <datalist id="companyList">
+          {% for c in companies %}<option value="{{ c.name }}">{% endfor %}
+        </datalist>
+      </div>
+      <div class="field"><label>Title</label><input name="title" required></div>
+      <div class="field"><label>Location</label><input name="location"></div>
+      <div class="field"><label>Comp min</label><input name="comp_min" type="number" step="any"></div>
+      <div class="field"><label>Comp max</label><input name="comp_max" type="number" step="any"></div>
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>URL</label><input name="url" placeholder="https://"></div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Job description</label>
+      <textarea name="jd_text" rows="4"></textarea>
+    </div>
+    <div style="margin-top:0.6rem"><button class="btn" type="submit">Add posting</button></div>
+  </form>
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0.6rem 0 0">
+    The company is created automatically if it doesn't exist yet — no need to add it first.
+  </p>
+</details>
+
+{% if postings %}
+<div class="grid">
+  {% for p in postings %}
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+      <strong>{{ p.title }}</strong>
+      {% if p.my_rating %}<span class="pill {{ p.my_rating.value|lower }}">{{ p.my_rating.value }}</span>{% endif %}
+    </div>
+    <div style="color:var(--muted);font-size:0.82rem">
+      {{ p.company.name if p.company else "" }}{% if p.location %} · {{ p.location }}{% endif %}
+    </div>
+    {% if p.jd_text %}
+    <div style="font-size:0.8rem;color:var(--muted);margin-top:0.4rem">
+      {{ p.jd_text[:150] }}{% if p.jd_text|length > 150 %}…{% endif %}
+    </div>
+    {% endif %}
+    <form method="post" action="/ui/postings/{{ p.id }}/rate" class="rating-row">
+      <button class="ratebtn up" name="rating" value="Up" title="Thumbs up">▲</button>
+      <button class="ratebtn neutral" name="rating" value="Neutral" title="Neutral">—</button>
+      <button class="ratebtn down" name="rating" value="Down" title="Thumbs down">▼</button>
+      <input name="reason" placeholder="reason (optional)" style="flex:1" value="">
+    </form>
+    {% if p.rating_reason %}
+    <div style="font-size:0.75rem;color:var(--neutral);margin-top:0.35rem">“{{ p.rating_reason }}”</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No postings yet — add one above.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const importBtn = document.getElementById('importBtn');
+  if (importBtn) {
+    importBtn.addEventListener('click', async () => {
+      const url = document.getElementById('importUrl').value.trim();
+      const status = document.getElementById('importStatus');
+      const form = document.getElementById('newPostingForm');
+      if (!url) { status.textContent = 'Paste a URL first.'; return; }
+      status.textContent = 'Fetching…';
+      importBtn.disabled = true;
+      try {
+        const res = await fetch('/api/postings/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          status.textContent = 'Could not fetch — ' + (d.detail || ('HTTP ' + res.status));
+          return;
+        }
+        if (d.title) form.title.value = d.title;
+        if (d.location) form.location.value = d.location;
+        form.url.value = d.source_url || url;
+        if (d.jd_text) form.jd_text.value = d.jd_text;
+        if (d.comp_min != null) form.comp_min.value = d.comp_min;
+        if (d.comp_max != null) form.comp_max.value = d.comp_max;
+        if (d.company_name) form.company_name.value = d.company_name;
+
+        let msg = 'Loaded' + (d.title ? (' “' + d.title + '”') : '') + '.';
+        if (d.company_name) {
+          msg += d.matched_company_id
+            ? ' Matched your existing company “' + d.company_name + '”.'
+            : ' Company “' + d.company_name + '” will be created when you save.';
+        }
+        if (!d.title && !d.jd_text) {
+          msg = 'Fetched the page, but found no structured job fields — this site likely needs Firecrawl. Fill the form in manually.';
+        }
+        status.textContent = msg;
+      } catch (err) {
+        status.textContent = 'Error: ' + err;
+      } finally {
+        importBtn.disabled = false;
+      }
+    });
+  }
+</script>
+{% endblock %}
