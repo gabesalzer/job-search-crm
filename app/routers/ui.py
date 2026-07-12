@@ -7,8 +7,10 @@ the drag-to-change-stage on the board calls the JSON API directly.
 from __future__ import annotations
 
 import pathlib
+import re
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
@@ -87,22 +89,60 @@ def postings_page(request: Request, db: Session = Depends(get_db)):
     })
 
 
-def _find_or_create_company(name: str, db: Session) -> models.Company:
+# Job-board / ATS domains — for these, the posting URL's domain is the board,
+# not the employer, so we don't infer a company website from it.
+_ATS_DOMAINS = (
+    "greenhouse.io", "lever.co", "ashbyhq.com", "myworkdayjobs.com", "workday.com",
+    "linkedin.com", "indeed.com", "glassdoor.com", "jobvite.com", "smartrecruiters.com",
+    "bamboohr.com", "breezy.hr", "workable.com", "icims.com", "teamtailor.com",
+)
+
+
+def _company_website(source_url: Optional[str]) -> Optional[str]:
+    """Infer a company website from a posting URL.
+
+    When the posting is hosted on the company's own domain (e.g.
+    ``plaid.com/careers/...``), that domain *is* the company site. Skipped for
+    ATS/job-board domains, where the domain is the board rather than the employer.
+    """
+    if not source_url:
+        return None
+    parsed = urlparse(
+        source_url if re.match(r"^https?://", source_url, re.I) else "https://" + source_url
+    )
+    host = (parsed.netloc or "").lower().split(":")[0]
+    if not host or any(host == d or host.endswith("." + d) for d in _ATS_DOMAINS):
+        return None
+    if host.startswith("www."):
+        host = host[4:]
+    return f"https://{host}"
+
+
+def _find_or_create_company(
+    name: str, db: Session, source_url: Optional[str] = None
+) -> models.Company:
     """Look up a company by name (case-insensitive), creating it if missing.
 
     This is what makes the flow posting-first: you add a posting and the
     company (Account) is created automatically if it doesn't exist yet — no
-    need to set up the company beforehand.
+    need to set up the company beforehand. When we can infer a website from the
+    posting URL, we set it on creation (and backfill it onto an existing company
+    that doesn't have one yet).
     """
     name = (name or "").strip() or "Unknown company"
+    website = _company_website(source_url)
     existing = (
         db.query(models.Company)
         .filter(models.Company.name.ilike(name))
         .first()
     )
     if existing:
+        if website and not existing.website:
+            existing.website = website
         return existing
-    company = models.Company(name=name, company_type=models.CompanyType.EMPLOYER)
+    company = models.Company(
+        name=name, company_type=models.CompanyType.EMPLOYER, website=website
+    )
     db.add(company)
     db.flush()  # assigns company.id within this transaction
     return company
@@ -126,7 +166,7 @@ def create_posting_ui(
     comp_max: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    company = _find_or_create_company(company_name, db)
+    company = _find_or_create_company(company_name, db, source_url=url)
     db.add(models.JobPosting(
         company_id=company.id,
         title=title,
