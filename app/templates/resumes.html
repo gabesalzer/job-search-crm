@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Resumes · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Resumes</h1>
+<p class="subtitle">Upload each resume version. The text is extracted so you can attach a version to an application and later see which one gets traction.</p>
+
+<details class="newform" {% if not resumes %}open{% endif %}>
+  <summary>New resume version</summary>
+  <form method="post" action="/ui/resumes" enctype="multipart/form-data">
+    <div class="form-grid">
+      <div class="field">
+        <label>Label</label>
+        <input name="label" placeholder="RevOps v3 – metrics-forward" required>
+      </div>
+      <div class="field">
+        <label>Upload file (PDF / DOCX)</label>
+        <input type="file" name="file" accept=".pdf,.docx,.txt,.md">
+      </div>
+      <div class="field">
+        <label>Source link (optional)</label>
+        <input name="source_link" placeholder="Google Drive URL">
+      </div>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Or paste the text (instead of a file)</label>
+      <textarea name="pasted_text" rows="4" placeholder="Paste resume text here if you're not uploading a file…"></textarea>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Notes (optional)</label>
+      <input name="notes" placeholder="e.g. tuned for GTM / analytics-heavy roles">
+    </div>
+    <div style="margin-top:0.6rem"><button class="btn" type="submit">Add resume</button></div>
+  </form>
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0.6rem 0 0">
+    Upload a file <em>or</em> paste text — the extracted text is what the analysis uses. The source link is just a reference to the original.
+  </p>
+</details>
+
+{% if resumes %}
+<div class="grid">
+  {% for r in resumes %}
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+      <strong>{{ r.label }}</strong>
+      <span class="pill">{{ r.applications|length }} app(s)</span>
+    </div>
+    <div style="color:var(--muted);font-size:0.8rem;margin-top:0.3rem">
+      {% if r.filename %}<span class="tag">{{ r.filename }}</span>{% endif %}
+      {% if r.source_link %}<a href="{{ r.source_link }}" target="_blank" rel="noopener">source ↗</a>{% endif %}
+    </div>
+    {% if r.content %}
+    <div style="font-size:0.8rem;color:var(--muted);margin-top:0.45rem;white-space:pre-wrap;max-height:5.5em;overflow:hidden">{{ r.content[:280] }}{% if r.content|length > 280 %}…{% endif %}</div>
+    <div style="font-size:0.72rem;color:var(--neutral);margin-top:0.35rem">{{ r.content|length }} characters extracted</div>
+    {% else %}
+    <div style="font-size:0.78rem;color:var(--down);margin-top:0.45rem">No text extracted — try pasting the text, or re-upload.</div>
+    {% endif %}
+    {% if r.notes %}<div style="font-size:0.75rem;color:var(--neutral);margin-top:0.35rem">{{ r.notes }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No resume versions yet — add one above. Then you can pick it when creating an application.</p>
+{% endif %}
+{% endblock %}

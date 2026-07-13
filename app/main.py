@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from .database import Base, engine
+from .database import Base, engine, ensure_schema
 from .routers import (
     analytics,
     applications,
@@ -14,8 +14,10 @@ from .routers import (
     ui,
 )
 
-# Create tables on startup. For schema migrations later, swap in Alembic.
+# Create any missing tables, then add any missing columns to existing tables
+# (a lightweight auto-migration so schema changes don't drop your data).
 Base.metadata.create_all(bind=engine)
+ensure_schema()
 
 app = FastAPI(
     title="Job Search CRM",

@@ -43,6 +43,31 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):
         pass
 
 
+def ensure_schema():
+    """Lightweight auto-migration for SQLite.
+
+    Adds any model column that's missing from an existing table (SQLite supports
+    ``ALTER TABLE ADD COLUMN``). This lets the schema evolve — e.g. new fields on
+    Resume — without dropping the database or pulling in a migration framework.
+    New columns must be nullable (no NOT NULL without a default), which they are.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    for table_name, table in Base.metadata.tables.items():
+        if not inspector.has_table(table_name):
+            continue  # create_all will make it
+        existing = {col["name"] for col in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            col_type = column.type.compile(dialect=engine.dialect)
+            with engine.begin() as conn:
+                conn.execute(
+                    text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column.name}" {col_type}')
+                )
+
+
 def get_db():
     """FastAPI dependency that yields a request-scoped session."""
     db = SessionLocal()

@@ -12,13 +12,14 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_db
+from ..services.resume_extract import extract_text
 
 # templates/ lives next to app/, resolved relative to this file so it works
 # regardless of the current working directory.
@@ -224,3 +225,51 @@ def create_company_ui(
     ))
     db.commit()
     return RedirectResponse(url="/companies", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Resumes
+# --------------------------------------------------------------------------- #
+@router.get("/resumes")
+def resumes_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(request, "resumes.html", {
+        "active": "resumes",
+        "resumes": db.query(models.Resume).order_by(models.Resume.created_at.desc()).all(),
+    })
+
+
+@router.post("/ui/resumes")
+def create_resume_ui(
+    label: str = Form(...),
+    source_link: str = Form(""),
+    notes: str = Form(""),
+    pasted_text: str = Form(""),
+    file: UploadFile = File(None),
+    db: Session = Depends(get_db),
+):
+    """Create a resume version. If a file is uploaded, extract its text;
+    otherwise use pasted text. Either way, `content` holds plain text for
+    analysis, and `source_link` can reference the original (e.g. a Drive URL).
+    """
+    text_content = (pasted_text or "").strip()
+    filename = None
+    if file is not None and file.filename:
+        filename = file.filename
+        data = file.file.read()
+        if data:
+            try:
+                extracted = extract_text(filename, data)
+            except Exception:
+                extracted = ""
+            if extracted:
+                text_content = extracted
+
+    db.add(models.Resume(
+        label=label,
+        content=text_content or None,
+        source_link=source_link or None,
+        filename=filename,
+        notes=notes or None,
+    ))
+    db.commit()
+    return RedirectResponse(url="/resumes", status_code=303)

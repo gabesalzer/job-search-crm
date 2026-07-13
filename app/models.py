@@ -170,7 +170,9 @@ class Resume(Base):
 
     id = Column(Integer, primary_key=True)
     label = Column(String(255), nullable=False)  # e.g. "RevOps v3 - metrics-forward"
-    content = Column(Text)  # raw text, or a path/URL to the file
+    content = Column(Text)  # extracted plain text (what analysis runs on)
+    source_link = Column(String(1024))  # optional reference, e.g. a Google Drive URL
+    filename = Column(String(512))  # original uploaded filename, if any
     notes = Column(Text)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
