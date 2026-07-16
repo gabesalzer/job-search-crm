@@ -1,0 +1,25 @@
+# Render Blueprint — deploys the app as one always-on web service with a
+# persistent disk for the SQLite database. Create the service by pointing
+# Render at this repo ("New +" -> "Blueprint"). Set APP_PASSWORD as a secret
+# in the dashboard (it's intentionally not stored here).
+services:
+  - type: web
+    name: job-search-crm
+    runtime: python
+    plan: starter                      # always-on; required for a persistent disk
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /var/data             # SQLite DB lives here so it survives deploys
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:////var/data/jobsearch.db   # four slashes = absolute path
+      - key: APP_USERNAME
+        value: gabe
+      - key: APP_PASSWORD
+        sync: false                    # set this yourself in the dashboard (secret)
+      - key: PYTHON_VERSION
+        value: "3.12.7"

@@ -1,7 +1,14 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
+import base64
+import os
+import secrets
+
 from fastapi import FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from .database import Base, engine, ensure_schema
 from .routers import (
@@ -24,6 +31,39 @@ app = FastAPI(
     description="Run a job search like a revenue pipeline. See ARCHITECTURE.md.",
     version="0.1.0",
 )
+
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    """Password-gate the whole app when APP_PASSWORD is set.
+
+    Uses HTTP Basic Auth (safe over the HTTPS your host provides). If
+    APP_PASSWORD is empty — e.g. running locally — auth is disabled so you don't
+    need a password on your own machine. In the cloud, set APP_USERNAME and
+    APP_PASSWORD as environment variables and every route requires them.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        password = os.getenv("APP_PASSWORD", "")
+        if not password:
+            return await call_next(request)  # auth disabled (local dev)
+        username = os.getenv("APP_USERNAME", "gabe")
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(header[6:]).decode("utf-8")
+                user, _, pw = decoded.partition(":")
+                if secrets.compare_digest(user, username) and secrets.compare_digest(pw, password):
+                    return await call_next(request)
+            except Exception:
+                pass
+        return Response(
+            "Authentication required.",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Job Search CRM"'},
+        )
+
+
+app.add_middleware(BasicAuthMiddleware)
 
 # JSON API routers (mounted under /api/*)
 app.include_router(companies.router)
