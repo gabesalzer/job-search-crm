@@ -227,6 +227,13 @@ class JobApplication(Base):
     )
     # People tied to this application (lookup from Person side).
     people = relationship("Person", back_populates="application")
+    # Meetings (interviews / calls) for this application (master-detail).
+    meetings = relationship(
+        "Meeting",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="Meeting.meeting_date",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -283,6 +290,50 @@ class Person(Base):
 
     company = relationship("Company", back_populates="people")
     application = relationship("JobApplication", back_populates="people")
+
+
+# --------------------------------------------------------------------------- #
+# Meeting  (== Activity/Event on an Opportunity): an interview or call
+# --------------------------------------------------------------------------- #
+class MeetingType(str, enum.Enum):
+    RECRUITER_SCREEN = "Recruiter Screen"
+    HIRING_MANAGER = "Hiring Manager"
+    TECHNICAL = "Technical"
+    ONSITE = "Onsite"
+    PANEL = "Panel"
+    OTHER = "Other"
+
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+
+    id = Column(Integer, primary_key=True)
+
+    # Master-detail to Application: a meeting exists because you're pursuing a
+    # role. Through the application it also reaches the Posting (JD) and Resume —
+    # which is what makes "questions by JD / by resume" analysis possible.
+    application_id = Column(
+        Integer,
+        ForeignKey("job_applications.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    title = Column(String(512))
+    meeting_type = Column(Enum(MeetingType))
+    meeting_date = Column(DateTime)
+
+    summary = Column(Text)      # AI summary (e.g. from Granola)
+    transcript = Column(Text)   # full transcript — where the questions live
+    notes = Column(Text)        # your own notes
+
+    granola_note_id = Column(String(255), index=True)  # for linking / de-dup
+    granola_link = Column(String(1024))
+
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    application = relationship("JobApplication", back_populates="meetings")
 
 
 # --------------------------------------------------------------------------- #

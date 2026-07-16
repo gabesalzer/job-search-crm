@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Meetings · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Meetings</h1>
+<p class="subtitle">Interviews and calls, attached to an application. Capture the summary and transcript — the questions asked live in the transcript, and through the application they connect to the JD and the resume you used.</p>
+
+<details class="newform" {% if not meetings %}open{% endif %}>
+  <summary>New meeting</summary>
+
+  {% if applications %}
+  {% if granola_enabled %}
+  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.3rem 0 0.2rem">
+    <button type="button" class="btn secondary" id="granolaLoad">Load Granola notes</button>
+    <select id="granolaSelect" style="flex:1;min-width:220px;display:none"></select>
+    <button type="button" class="btn secondary" id="granolaImport" style="display:none">Import selected</button>
+  </div>
+  <div id="granolaStatus" style="font-size:0.8rem;color:var(--muted);min-height:1.1em;margin:0.2rem 0 0.7rem"></div>
+  {% else %}
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0.2rem 0 0.7rem">
+    Tip: set a <code>GRANOLA_API_KEY</code> (in your <code>.env</code> locally, or Render's Environment settings) to import notes automatically. Until then, paste them in below.
+  </p>
+  {% endif %}
+
+  <form method="post" action="/ui/meetings" id="newMeetingForm">
+    <input type="hidden" name="granola_note_id" id="granolaNoteId">
+    <div class="form-grid">
+      <div class="field">
+        <label>Application</label>
+        <select name="application_id" required>
+          {% for a in applications %}
+          <option value="{{ a.id }}">{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Title</label><input name="title" placeholder="Recruiter screen w/ Jane"></div>
+      <div class="field">
+        <label>Type</label>
+        <select name="meeting_type">
+          <option value="">—</option>
+          {% for t in meeting_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Date</label><input name="meeting_date" type="datetime-local"></div>
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>Summary</label><textarea name="summary" rows="3"></textarea></div>
+    <div class="field" style="margin-top:0.5rem"><label>Transcript</label><textarea name="transcript" rows="5" placeholder="Full transcript — this is what we'll mine for interview questions"></textarea></div>
+    <div class="form-grid" style="margin-top:0.5rem">
+      <div class="field"><label>Granola link (optional)</label><input name="granola_link" placeholder="https://"></div>
+      <div class="field"><label>Your notes (optional)</label><input name="notes"></div>
+    </div>
+    <div style="margin-top:0.6rem"><button class="btn" type="submit">Add meeting</button></div>
+  </form>
+  {% else %}
+  <p class="empty">Create an application first on the <a href="/board">Pipeline</a> tab — a meeting attaches to one.</p>
+  {% endif %}
+</details>
+
+{% if meetings %}
+<div class="grid">
+  {% for m in meetings %}
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+      <strong>{{ m.title or "Untitled meeting" }}</strong>
+      {% if m.meeting_type %}<span class="pill">{{ m.meeting_type.value }}</span>{% endif %}
+    </div>
+    <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
+      {{ m.application.title or "Untitled" if m.application else "—" }}
+      {% if m.application and m.application.company %} · {{ m.application.company.name }}{% endif %}
+      {% if m.meeting_date %} · {{ m.meeting_date.strftime("%b %d, %Y") }}{% endif %}
+    </div>
+    {% if m.summary %}
+    <div style="font-size:0.8rem;color:var(--muted);margin-top:0.45rem;white-space:pre-wrap;max-height:5.5em;overflow:hidden">{{ m.summary[:280] }}{% if m.summary|length > 280 %}…{% endif %}</div>
+    {% endif %}
+    <div style="font-size:0.72rem;color:var(--neutral);margin-top:0.4rem">
+      {% if m.transcript %}{{ m.transcript|length }} chars of transcript{% else %}no transcript{% endif %}
+      {% if m.granola_link %} · <a href="{{ m.granola_link }}" target="_blank" rel="noopener">Granola ↗</a>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No meetings yet — add one above.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if granola_enabled %}
+<script>
+  const loadBtn = document.getElementById('granolaLoad');
+  const sel = document.getElementById('granolaSelect');
+  const importBtn = document.getElementById('granolaImport');
+  const status = document.getElementById('granolaStatus');
+  const form = document.getElementById('newMeetingForm');
+
+  loadBtn.addEventListener('click', async () => {
+    status.textContent = 'Loading your Granola notes…';
+    try {
+      const res = await fetch('/api/granola/notes');
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { status.textContent = 'Could not load: ' + (d.detail || res.status); return; }
+      const notes = d.notes || [];
+      if (!notes.length) { status.textContent = 'No notes found (only notes with an AI summary are returned).'; return; }
+      sel.innerHTML = '';
+      for (const n of notes) {
+        const o = document.createElement('option');
+        o.value = n.id;
+        o.textContent = (n.title || 'Untitled') + (n.created_at ? ' — ' + n.created_at : '');
+        sel.appendChild(o);
+      }
+      sel.style.display = ''; importBtn.style.display = '';
+      status.textContent = 'Pick a note, then Import.';
+    } catch (e) { status.textContent = 'Error: ' + e; }
+  });
+
+  importBtn.addEventListener('click', async () => {
+    const id = sel.value;
+    if (!id) return;
+    status.textContent = 'Importing…';
+    try {
+      const res = await fetch('/api/granola/notes/' + encodeURIComponent(id));
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { status.textContent = 'Import failed: ' + (d.detail || res.status); return; }
+      if (d.title) form.title.value = d.title;
+      if (d.summary) form.summary.value = d.summary;
+      if (d.transcript) form.transcript.value = d.transcript;
+      if (d.link) form.granola_link.value = d.link;
+      if (d.id) document.getElementById('granolaNoteId').value = d.id;
+      if (d.created_at) {
+        const dt = new Date(d.created_at);
+        if (!isNaN(dt)) form.meeting_date.value = dt.toISOString().slice(0, 16);
+      }
+      status.textContent = 'Imported “' + (d.title || 'note') + '”. Pick the application and save.';
+    } catch (e) { status.textContent = 'Error: ' + e; }
+  });
+</script>
+{% endif %}
+{% endblock %}

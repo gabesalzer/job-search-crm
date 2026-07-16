@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..database import get_db
+from ..services import granola
 from ..services.resume_extract import extract_text
 
 # templates/ lives next to app/, resolved relative to this file so it works
@@ -273,3 +274,55 @@ def create_resume_ui(
     ))
     db.commit()
     return RedirectResponse(url="/resumes", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Meetings (interviews / calls, optionally imported from Granola)
+# --------------------------------------------------------------------------- #
+def _parse_dt(value: str):
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)  # handles YYYY-MM-DD and ...THH:MM
+    except ValueError:
+        return None
+
+
+@router.get("/meetings")
+def meetings_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(request, "meetings.html", {
+        "active": "meetings",
+        "meetings": db.query(models.Meeting).order_by(models.Meeting.created_at.desc()).all(),
+        "applications": db.query(models.JobApplication).all(),
+        "meeting_types": [t.value for t in models.MeetingType],
+        "granola_enabled": granola.enabled(),
+    })
+
+
+@router.post("/ui/meetings")
+def create_meeting_ui(
+    application_id: int = Form(...),
+    title: str = Form(""),
+    meeting_type: str = Form(""),
+    meeting_date: str = Form(""),
+    summary: str = Form(""),
+    transcript: str = Form(""),
+    notes: str = Form(""),
+    granola_note_id: str = Form(""),
+    granola_link: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    db.add(models.Meeting(
+        application_id=application_id,
+        title=title or None,
+        meeting_type=models.MeetingType(meeting_type) if meeting_type else None,
+        meeting_date=_parse_dt(meeting_date),
+        summary=summary or None,
+        transcript=transcript or None,
+        notes=notes or None,
+        granola_note_id=granola_note_id or None,
+        granola_link=granola_link or None,
+    ))
+    db.commit()
+    return RedirectResponse(url="/meetings", status_code=303)

@@ -15,6 +15,7 @@ from .routers import (
     analytics,
     applications,
     companies,
+    granola,
     people,
     postings,
     resumes,
@@ -78,6 +79,7 @@ app.include_router(applications.router)
 app.include_router(people.router)
 app.include_router(resumes.router)
 app.include_router(analytics.router)
+app.include_router(granola.router)
 
 # Server-rendered UI (/, /board, /postings, /companies, and /ui/* form handlers)
 app.include_router(ui.router)
