@@ -42,10 +42,16 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     APP_PASSWORD as environment variables and every route requires them.
     """
 
+    # Paths reachable without a password: the health check the host pings, and
+    # the JSON health endpoint. Everything else is gated.
+    OPEN_PATHS = {"/health"}
+
     async def dispatch(self, request: Request, call_next):
         password = os.getenv("APP_PASSWORD", "")
         if not password:
             return await call_next(request)  # auth disabled (local dev)
+        if request.url.path in self.OPEN_PATHS:
+            return await call_next(request)  # e.g. Render's /health probe
         username = os.getenv("APP_USERNAME", "gabe")
         header = request.headers.get("Authorization", "")
         if header.startswith("Basic "):
