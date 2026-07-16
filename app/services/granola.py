@@ -63,7 +63,7 @@ def get_note(note_id: str) -> dict:
     resp = httpx.get(
         f"{API_BASE}/notes/{note_id}",
         headers=_headers(),
-        params={"include_transcript": "true"},
+        params={"include": "transcript"},  # Granola opts the transcript in via this param
         timeout=45,
     )
     resp.raise_for_status()
@@ -89,9 +89,23 @@ def _first(d: dict, *keys):
     return None
 
 
+def _speaker_label(speaker) -> Optional[str]:
+    """Granola transcript segments carry a speaker like {"source": "microphone"}.
+    Turn that into a readable label."""
+    if isinstance(speaker, str):
+        return speaker
+    if isinstance(speaker, dict):
+        name = speaker.get("name")
+        if name:
+            return name
+        source = speaker.get("source")
+        return {"microphone": "Me", "system": "Them"}.get(source, source)
+    return None
+
+
 def _as_text(value) -> Optional[str]:
-    """Summaries/transcripts may come back as a string, a list of segments, or a
-    dict — flatten to plain text."""
+    """Summaries/transcripts may come back as a string, a list of speaker
+    segments, or a dict — flatten to readable plain text."""
     if value is None:
         return None
     if isinstance(value, str):
@@ -102,10 +116,12 @@ def _as_text(value) -> Optional[str]:
             if isinstance(seg, str):
                 parts.append(seg)
             elif isinstance(seg, dict):
-                speaker = seg.get("speaker") or seg.get("name")
                 text = _first(seg, "text", "content", "value") or ""
-                parts.append(f"{speaker}: {text}" if speaker else text)
+                if not text:
+                    continue
+                label = _speaker_label(seg.get("speaker"))
+                parts.append(f"{label}: {text}" if label else text)
         return "\n".join(p for p in parts if p).strip() or None
     if isinstance(value, dict):
-        return _as_text(_first(value, "text", "content", "value", "markdown"))
+        return _as_text(_first(value, "text", "content", "value", "markdown", "transcript"))
     return str(value)
