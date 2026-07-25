@@ -75,6 +75,7 @@
       {% if m.transcript %}{{ m.transcript|length }} chars of transcript{% else %}no transcript{% endif %}
       {% if m.granola_link %} · <a href="{{ m.granola_link }}" target="_blank" rel="noopener">Granola ↗</a>{% endif %}
     </div>
+    <div style="margin-top:0.4rem"><a href="/meetings/{{ m.id }}/edit" style="font-size:0.78rem">Edit</a></div>
   </div>
   {% endfor %}
 </div>

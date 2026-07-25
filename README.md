@@ -73,6 +73,14 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   written to stage history.
 - **Companies**: employers and staffing agencies, typed so you can later report
   on which employers vs. which agencies get you traction.
+- **Meetings**: interviews and calls, attached to an application. Capture the
+  summary and transcript by hand, or (with `GRANOLA_API_KEY` set) load and
+  import a note from Granola.
+- **Editing**: every record type (companies, postings, resumes, applications,
+  meetings) has an *Edit* link that opens a form pre-filled with its current
+  values. For meetings, the edit page also carries the Granola import
+  controls, so you can re-pull or switch a note's transcript onto an existing
+  meeting instead of deleting and recreating it.
 
 ## Data & privacy
 
@@ -85,7 +93,9 @@ also gitignored.
 
 Implemented: the full object model, stage-history tracking, the web UI, the JSON
 API, and the URL scraper (Greenhouse/Lever APIs, JSON-LD, optional Firecrawl),
-plus posting-first company creation and application↔posting links.
+posting-first company creation, application↔posting links, resume upload with
+text extraction, Meetings with optional Granola import, and edit forms for
+every record type.
 
 Planned next: a Firecrawl-powered bulk *search* for postings, the three-layer
 dedup pipeline, richer company enrichment, and the funnel / resume-traction

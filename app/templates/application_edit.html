@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Edit application · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Edit application</h1>
+<p class="subtitle"><a href="/board">← Back to Pipeline</a></p>
+
+<div class="panel" style="max-width:720px">
+  <form method="post" action="/ui/applications/{{ app_obj.id }}/edit" id="editAppForm">
+    <div class="form-grid">
+      <div class="field">
+        <label>From posting</label>
+        <select name="job_posting_id" id="appPosting">
+          <option value="">— none —</option>
+          {% for p in postings %}
+          <option value="{{ p.id }}" {% if app_obj.job_posting_id==p.id %}selected{% endif %}>
+            {{ p.title }} — {{ p.company.name if p.company else "?" }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Company</label>
+        <select name="company_id" required>
+          {% for c in companies %}
+          <option value="{{ c.id }}" {% if app_obj.company_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Role title</label><input name="title" value="{{ app_obj.title or '' }}"></div>
+      <div class="field">
+        <label>Stage</label>
+        <select name="stage" id="appStage">
+          {% for s in stages %}
+          <option value="{{ s }}" {% if app_obj.stage.value==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" id="lostReasonField" style="{% if app_obj.stage.value != 'Closed Lost' %}display:none{% endif %}">
+        <label>Lost reason</label>
+        <select name="lost_reason">
+          <option value="">—</option>
+          {% for r in lost_reasons %}
+          <option value="{{ r }}" {% if app_obj.lost_reason and app_obj.lost_reason.value==r %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Resume</label>
+        <select name="resume_id">
+          <option value="">—</option>
+          {% for r in resumes %}
+          <option value="{{ r.id }}" {% if app_obj.resume_id==r.id %}selected{% endif %}>{{ r.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Applied date</label>
+        <input name="applied_date" type="datetime-local" value="{{ app_obj.applied_date.strftime('%Y-%m-%dT%H:%M') if app_obj.applied_date else '' }}">
+      </div>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Notes</label>
+      <textarea name="notes" rows="3">{{ app_obj.notes or '' }}</textarea>
+    </div>
+    <p style="font-size:0.78rem;color:var(--neutral);margin:0.5rem 0 0">
+      Changing the stage here is logged to the stage history, same as dragging the card on the board.
+    </p>
+    <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
+      <button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/board">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const stageSel = document.getElementById('appStage');
+  const lostField = document.getElementById('lostReasonField');
+  if (stageSel) {
+    stageSel.addEventListener('change', () => {
+      lostField.style.display = stageSel.value === 'Closed Lost' ? '' : 'none';
+    });
+  }
+</script>
+{% endblock %}

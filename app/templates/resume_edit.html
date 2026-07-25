@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ resume.label }} · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Edit resume</h1>
+<p class="subtitle"><a href="/resumes">← Back to Resumes</a></p>
+
+<div class="panel" style="max-width:720px">
+  <form method="post" action="/ui/resumes/{{ resume.id }}/edit" enctype="multipart/form-data">
+    <div class="form-grid">
+      <div class="field"><label>Label</label><input name="label" value="{{ resume.label }}" required></div>
+      <div class="field">
+        <label>Replace file (PDF / DOCX, optional)</label>
+        <input type="file" name="file" accept=".pdf,.docx,.txt,.md">
+      </div>
+      <div class="field"><label>Source link (optional)</label><input name="source_link" value="{{ resume.source_link or '' }}" placeholder="Google Drive URL"></div>
+    </div>
+    {% if resume.filename %}
+    <p style="font-size:0.78rem;color:var(--neutral);margin:0.3rem 0 0">Current file: <span class="tag">{{ resume.filename }}</span> — upload a new one above to replace it.</p>
+    {% endif %}
+    <div class="field" style="margin-top:0.5rem">
+      <label>Extracted text (edit directly, or leave as-is and just re-upload a file above)</label>
+      <textarea name="pasted_text" rows="6">{{ resume.content or '' }}</textarea>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Notes (optional)</label>
+      <input name="notes" value="{{ resume.notes or '' }}">
+    </div>
+    <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
+      <button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/resumes">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

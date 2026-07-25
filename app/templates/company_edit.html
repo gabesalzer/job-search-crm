@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ company.name }} · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Edit company</h1>
+<p class="subtitle"><a href="/companies">← Back to Companies</a></p>
+
+<div class="panel" style="max-width:640px">
+  <form method="post" action="/ui/companies/{{ company.id }}/edit">
+    <div class="form-grid">
+      <div class="field"><label>Name</label><input name="name" value="{{ company.name }}" required></div>
+      <div class="field">
+        <label>Type</label>
+        <select name="company_type">
+          {% for t in company_types %}
+          <option value="{{ t }}" {% if company.company_type.value==t %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Website</label><input name="website" value="{{ company.website or '' }}" placeholder="https://"></div>
+      <div class="field"><label>Industry</label><input name="industry" value="{{ company.industry or '' }}"></div>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Notes</label>
+      <textarea name="notes" rows="3">{{ company.notes or '' }}</textarea>
+    </div>
+    <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
+      <button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/companies">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

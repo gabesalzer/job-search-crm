@@ -37,6 +37,7 @@
     <div style="font-size:0.76rem;color:var(--neutral);margin-top:0.55rem">
       {{ c.applications|length }} application(s) · {{ c.postings|length }} posting(s) · {{ c.people|length }} contact(s)
     </div>
+    <div style="margin-top:0.5rem"><a href="/companies/{{ c.id }}/edit" style="font-size:0.78rem">Edit</a></div>
   </div>
   {% endfor %}
 </div>

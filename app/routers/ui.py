@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -31,6 +31,14 @@ router = APIRouter(tags=["ui"], include_in_schema=False)
 
 STAGE_VALUES = [s.value for s in models.Stage]          # ordered; Closed Lost last
 COMPANY_TYPES = [t.value for t in models.CompanyType]
+LOST_REASON_VALUES = [r.value for r in models.LostReason]
+
+
+def _get_or_404(db: Session, model, obj_id: int):
+    obj = db.get(model, obj_id)
+    if not obj:
+        raise HTTPException(404, f"{model.__name__} not found")
+    return obj
 
 
 @router.get("/")
@@ -75,6 +83,55 @@ def create_application_ui(
         job_posting_id=int(job_posting_id) if job_posting_id else None,
     )
     db.add(app_obj)
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
+@router.get("/applications/{application_id}/edit")
+def edit_application_page(application_id: int, request: Request, db: Session = Depends(get_db)):
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    return templates.TemplateResponse(request, "application_edit.html", {
+        "active": "board",
+        "app_obj": app_obj,
+        "stages": STAGE_VALUES,
+        "lost_reasons": LOST_REASON_VALUES,
+        "companies": db.query(models.Company).order_by(models.Company.name).all(),
+        "resumes": db.query(models.Resume).order_by(models.Resume.label).all(),
+        "postings": db.query(models.JobPosting)
+        .order_by(models.JobPosting.last_seen_at.desc())
+        .all(),
+    })
+
+
+@router.post("/ui/applications/{application_id}/edit")
+def update_application_ui(
+    application_id: int,
+    company_id: int = Form(...),
+    title: str = Form(""),
+    stage: str = Form(...),
+    resume_id: Optional[str] = Form(None),
+    job_posting_id: Optional[str] = Form(None),
+    lost_reason: str = Form(""),
+    applied_date: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    app_obj.company_id = company_id
+    app_obj.title = title or None
+    app_obj.resume_id = int(resume_id) if resume_id else None
+    app_obj.job_posting_id = int(job_posting_id) if job_posting_id else None
+    app_obj.applied_date = _parse_dt(applied_date)
+    app_obj.notes = notes or None
+
+    new_stage = models.Stage(stage)
+    if new_stage != app_obj.stage:
+        app_obj.stage = new_stage  # triggers the StageHistory event listener
+        app_obj.last_activity_date = datetime.now(timezone.utc)
+    app_obj.lost_reason = (
+        models.LostReason(lost_reason) if new_stage == models.Stage.CLOSED_LOST and lost_reason else None
+    )
+
     db.commit()
     return RedirectResponse(url="/board", status_code=303)
 
@@ -198,6 +255,40 @@ def rate_posting_ui(
     return RedirectResponse(url="/postings", status_code=303)
 
 
+@router.get("/postings/{posting_id}/edit")
+def edit_posting_page(posting_id: int, request: Request, db: Session = Depends(get_db)):
+    posting = _get_or_404(db, models.JobPosting, posting_id)
+    return templates.TemplateResponse(request, "posting_edit.html", {
+        "active": "postings",
+        "posting": posting,
+    })
+
+
+@router.post("/ui/postings/{posting_id}/edit")
+def update_posting_ui(
+    posting_id: int,
+    company_name: str = Form(...),
+    title: str = Form(...),
+    location: str = Form(""),
+    url: str = Form(""),
+    jd_text: str = Form(""),
+    comp_min: str = Form(""),
+    comp_max: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    posting = _get_or_404(db, models.JobPosting, posting_id)
+    company = _find_or_create_company(company_name, db, source_url=url)
+    posting.company_id = company.id
+    posting.title = title
+    posting.location = location or None
+    posting.url = url or None
+    posting.jd_text = jd_text or None
+    posting.comp_min = _to_float(comp_min)
+    posting.comp_max = _to_float(comp_max)
+    db.commit()
+    return RedirectResponse(url="/postings", status_code=303)
+
+
 # --------------------------------------------------------------------------- #
 # Companies
 # --------------------------------------------------------------------------- #
@@ -224,6 +315,36 @@ def create_company_ui(
         website=website or None,
         industry=industry or None,
     ))
+    db.commit()
+    return RedirectResponse(url="/companies", status_code=303)
+
+
+@router.get("/companies/{company_id}/edit")
+def edit_company_page(company_id: int, request: Request, db: Session = Depends(get_db)):
+    company = _get_or_404(db, models.Company, company_id)
+    return templates.TemplateResponse(request, "company_edit.html", {
+        "active": "companies",
+        "company": company,
+        "company_types": COMPANY_TYPES,
+    })
+
+
+@router.post("/ui/companies/{company_id}/edit")
+def update_company_ui(
+    company_id: int,
+    name: str = Form(...),
+    company_type: str = Form("Employer"),
+    website: str = Form(""),
+    industry: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    company = _get_or_404(db, models.Company, company_id)
+    company.name = name
+    company.company_type = models.CompanyType(company_type)
+    company.website = website or None
+    company.industry = industry or None
+    company.notes = notes or None
     db.commit()
     return RedirectResponse(url="/companies", status_code=303)
 
@@ -276,6 +397,51 @@ def create_resume_ui(
     return RedirectResponse(url="/resumes", status_code=303)
 
 
+@router.get("/resumes/{resume_id}/edit")
+def edit_resume_page(resume_id: int, request: Request, db: Session = Depends(get_db)):
+    resume = _get_or_404(db, models.Resume, resume_id)
+    return templates.TemplateResponse(request, "resume_edit.html", {
+        "active": "resumes",
+        "resume": resume,
+    })
+
+
+@router.post("/ui/resumes/{resume_id}/edit")
+def update_resume_ui(
+    resume_id: int,
+    label: str = Form(...),
+    source_link: str = Form(""),
+    notes: str = Form(""),
+    pasted_text: str = Form(""),
+    file: UploadFile = File(None),
+    db: Session = Depends(get_db),
+):
+    """Update a resume version. Re-uploading a file re-extracts and replaces
+    the text; otherwise the pasted-text box (pre-filled with the current
+    extracted text) is the source of truth, so you can hand-fix extraction
+    glitches without re-uploading anything.
+    """
+    resume = _get_or_404(db, models.Resume, resume_id)
+    text_content = (pasted_text or "").strip()
+    if file is not None and file.filename:
+        resume.filename = file.filename
+        data = file.file.read()
+        if data:
+            try:
+                extracted = extract_text(file.filename, data)
+            except Exception:
+                extracted = ""
+            if extracted:
+                text_content = extracted
+
+    resume.label = label
+    resume.content = text_content or None
+    resume.source_link = source_link or None
+    resume.notes = notes or None
+    db.commit()
+    return RedirectResponse(url="/resumes", status_code=303)
+
+
 # --------------------------------------------------------------------------- #
 # Meetings (interviews / calls, optionally imported from Granola)
 # --------------------------------------------------------------------------- #
@@ -324,5 +490,52 @@ def create_meeting_ui(
         granola_note_id=granola_note_id or None,
         granola_link=granola_link or None,
     ))
+    db.commit()
+    return RedirectResponse(url="/meetings", status_code=303)
+
+
+@router.get("/meetings/{meeting_id}/edit")
+def edit_meeting_page(meeting_id: int, request: Request, db: Session = Depends(get_db)):
+    meeting = _get_or_404(db, models.Meeting, meeting_id)
+    return templates.TemplateResponse(request, "meeting_edit.html", {
+        "active": "meetings",
+        "meeting": meeting,
+        "applications": db.query(models.JobApplication).all(),
+        "meeting_types": [t.value for t in models.MeetingType],
+        "granola_enabled": granola.enabled(),
+    })
+
+
+@router.post("/ui/meetings/{meeting_id}/edit")
+def update_meeting_ui(
+    meeting_id: int,
+    application_id: int = Form(...),
+    title: str = Form(""),
+    meeting_type: str = Form(""),
+    meeting_date: str = Form(""),
+    summary: str = Form(""),
+    transcript: str = Form(""),
+    notes: str = Form(""),
+    granola_note_id: str = Form(""),
+    granola_link: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Update a meeting. This is also how you (re)attach a Granola transcript:
+    the edit page carries the same "Load Granola notes / Import selected"
+    controls as creation — picking a note there overwrites the title/summary/
+    transcript/date/link fields below before you save, so a meeting that was
+    imported before a Granola fix (or matched to the wrong note) can be
+    re-imported without deleting and recreating it.
+    """
+    meeting = _get_or_404(db, models.Meeting, meeting_id)
+    meeting.application_id = application_id
+    meeting.title = title or None
+    meeting.meeting_type = models.MeetingType(meeting_type) if meeting_type else None
+    meeting.meeting_date = _parse_dt(meeting_date)
+    meeting.summary = summary or None
+    meeting.transcript = transcript or None
+    meeting.notes = notes or None
+    meeting.granola_note_id = granola_note_id or None
+    meeting.granola_link = granola_link or None
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)

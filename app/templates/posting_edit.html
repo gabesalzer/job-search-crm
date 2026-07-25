@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ posting.title }} · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Edit posting</h1>
+<p class="subtitle"><a href="/postings">← Back to Postings</a></p>
+
+<div class="panel" style="max-width:760px">
+  <form method="post" action="/ui/postings/{{ posting.id }}/edit">
+    <div class="form-grid">
+      <div class="field">
+        <label>Company</label>
+        <input name="company_name" value="{{ posting.company.name if posting.company else '' }}" required>
+      </div>
+      <div class="field"><label>Title</label><input name="title" value="{{ posting.title }}" required></div>
+      <div class="field"><label>Location</label><input name="location" value="{{ posting.location or '' }}"></div>
+      <div class="field"><label>Comp min</label><input name="comp_min" type="number" step="any" value="{{ posting.comp_min if posting.comp_min is not none else '' }}"></div>
+      <div class="field"><label>Comp max</label><input name="comp_max" type="number" step="any" value="{{ posting.comp_max if posting.comp_max is not none else '' }}"></div>
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>URL</label><input name="url" value="{{ posting.url or '' }}" placeholder="https://"></div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Job description</label>
+      <textarea name="jd_text" rows="6">{{ posting.jd_text or '' }}</textarea>
+    </div>
+    <p style="font-size:0.78rem;color:var(--neutral);margin:0.5rem 0 0">
+      Changing the company name creates a new company if it doesn't already exist — same as when you add a posting.
+    </p>
+    <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
+      <button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/postings">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

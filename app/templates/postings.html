@@ -64,6 +64,7 @@
     {% if p.rating_reason %}
     <div style="font-size:0.75rem;color:var(--neutral);margin-top:0.35rem">“{{ p.rating_reason }}”</div>
     {% endif %}
+    <div style="margin-top:0.4rem"><a href="/postings/{{ p.id }}/edit" style="font-size:0.78rem">Edit</a></div>
   </div>
   {% endfor %}
 </div>

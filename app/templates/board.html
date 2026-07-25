@@ -58,7 +58,10 @@
     <div class="cards">
       {% for app in grouped[stage] %}
       <div class="card" draggable="true" data-id="{{ app.id }}">
-        <div class="title">{{ app.title or "Untitled role" }}</div>
+        <div style="display:flex;justify-content:space-between;gap:0.4rem;align-items:start">
+          <div class="title">{{ app.title or "Untitled role" }}</div>
+          <a href="/applications/{{ app.id }}/edit" title="Edit" style="font-size:0.78rem;flex:0 0 auto">Edit</a>
+        </div>
         <div class="co">{{ app.company.name if app.company else "—" }}</div>
         <div class="metarow">
           {% if app.resume %}<span class="tag">{{ app.resume.label }}</span>{% endif %}
