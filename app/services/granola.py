@@ -16,8 +16,10 @@ from typing import Optional
 
 import httpx
 
-# Base URL overridable via env in case Granola changes it.
-API_BASE = os.getenv("GRANOLA_API_BASE", "https://api.granola.ai/v1").rstrip("/")
+# Base URL overridable via env in case Granola changes it. NOTE: this is
+# public-api.granola.ai, not api.granola.ai -- the latter 404s. Confirmed
+# against Granola's own API reference (docs.granola.ai/api-reference).
+API_BASE = os.getenv("GRANOLA_API_BASE", "https://public-api.granola.ai/v1").rstrip("/")
 
 
 def _key() -> str:
@@ -33,9 +35,15 @@ def _headers() -> dict:
 
 
 def list_notes(limit: int = 25) -> list[dict]:
-    """Return a lightweight list of recent notes: {id, title, created_at}."""
+    """Return a lightweight list of recent notes: {id, title, created_at}.
+
+    Granola's own param is `page_size` (default 10, max 30) -- not `limit`.
+    """
     resp = httpx.get(
-        f"{API_BASE}/notes", headers=_headers(), params={"limit": limit}, timeout=30
+        f"{API_BASE}/notes",
+        headers=_headers(),
+        params={"page_size": min(max(limit, 1), 30)},
+        timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -74,7 +82,9 @@ def get_note(note_id: str) -> dict:
         "id": n.get("id") or note_id,
         "title": _first(n, "title", "name", "subject"),
         "created_at": _first(n, "created_at", "date", "started_at", "createdAt"),
-        "summary": _as_text(_first(n, "summary", "ai_summary", "notes")),
+        "summary": _as_text(
+            _first(n, "summary_text", "summary_markdown", "summary", "ai_summary", "notes")
+        ),
         "transcript": _as_text(_first(n, "transcript", "transcript_text", "content")),
         "link": _first(n, "url", "share_url", "link", "web_url"),
     }
@@ -90,16 +100,19 @@ def _first(d: dict, *keys):
 
 
 def _speaker_label(speaker) -> Optional[str]:
-    """Granola transcript segments carry a speaker like {"source": "microphone"}.
-    Turn that into a readable label."""
+    """Granola transcript segments carry a speaker like
+    {"source": "microphone" | "speaker", "diarization_label": "..."}. Turn
+    that into a readable label -- prefer a diarized name (useful on panel
+    interviews with multiple interviewers) and fall back to Me/Them by
+    source ("microphone" = you, "speaker" = the room/call audio)."""
     if isinstance(speaker, str):
         return speaker
     if isinstance(speaker, dict):
-        name = speaker.get("name")
-        if name:
-            return name
+        label = speaker.get("name") or speaker.get("diarization_label")
+        if label:
+            return label
         source = speaker.get("source")
-        return {"microphone": "Me", "system": "Them"}.get(source, source)
+        return {"microphone": "Me", "speaker": "Them"}.get(source, source)
     return None
 
 
