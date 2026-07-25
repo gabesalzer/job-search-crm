@@ -68,6 +68,60 @@ def ensure_schema():
                 )
 
 
+# Old (call-by-call) Stage -> new (macro/decision) Stage, July 2026 redesign.
+# Covers BOTH string forms SQLAlchemy might have persisted for a Python
+# str-Enum column -- the member NAME (e.g. "SAVED") or the member VALUE
+# (e.g. "Saved") -- without needing to know in advance which one this
+# database actually used. Both a name-keyed and value-keyed entry are listed
+# for every old stage; whichever family isn't actually in use simply matches
+# zero rows (name strings are ALL_CAPS_WITH_UNDERSCORES, value strings are
+# "Title Case", so the two families can never collide with each other or
+# with the new stage strings). CLOSED_WON/CLOSED_LOST aren't listed -- their
+# name and value are unchanged, so there's nothing to remap.
+_STAGE_REMAP = {
+    "SAVED": "QUALIFICATION", "Saved": "Qualification",
+    "APPLIED": "QUALIFICATION", "Applied": "Qualification",
+    "RECRUITER_SCREEN": "DISCOVERY", "Recruiter Screen": "Discovery",
+    "HIRING_MANAGER_SCREEN": "DISCOVERY", "Hiring Manager Screen": "Discovery",
+    "ONSITE": "TAKEHOME", "Onsite / Technical": "Takehome",
+    "OFFER": "NEGOTIATION", "Offer": "Negotiation",
+}
+
+
+def migrate_stage_names():
+    """One-time remap of every stored Stage value from the old (per-call)
+    model to the new (macro/decision) model. Safe to run on every startup:
+    once the old strings are gone, every UPDATE below matches zero rows, so
+    running this again is a no-op. Also cleans up StageHistory rows that
+    became a same-stage no-op transition after consolidation -- e.g. an
+    application that moved "Recruiter Screen" -> "Hiring Manager Screen"
+    now shows a redundant "Discovery" -> "Discovery" row, which carries no
+    information now that both collapse into one stage.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        for old, new in _STAGE_REMAP.items():
+            conn.execute(
+                text("UPDATE job_applications SET stage = :new WHERE stage = :old"),
+                {"new": new, "old": old},
+            )
+            conn.execute(
+                text("UPDATE stage_history SET to_stage = :new WHERE to_stage = :old"),
+                {"new": new, "old": old},
+            )
+            conn.execute(
+                text("UPDATE stage_history SET from_stage = :new WHERE from_stage = :old"),
+                {"new": new, "old": old},
+            )
+        conn.execute(
+            text(
+                "DELETE FROM stage_history "
+                "WHERE from_stage IS NOT NULL AND from_stage = to_stage"
+            )
+        )
+
+
 def get_db():
     """FastAPI dependency that yields a request-scoped session."""
     db = SessionLocal()

@@ -99,7 +99,7 @@ class JobApplicationBase(BaseModel):
     job_posting_id: Optional[int] = None
     resume_id: Optional[int] = None
     title: Optional[str] = None
-    stage: Stage = Stage.SAVED
+    stage: Stage = Stage.QUALIFICATION
     applied_date: Optional[datetime] = None
     notes: Optional[str] = None
 

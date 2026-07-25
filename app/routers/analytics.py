@@ -58,13 +58,13 @@ def resume_traction(db: Session = Depends(get_db)):
             (models.STAGE_ORDER.index(a.stage) for a in apps if a.stage in models.STAGE_ORDER),
             default=-1,
         )
-        offers = sum(1 for a in apps if a.stage == models.Stage.OFFER)
+        reached_negotiation = sum(1 for a in apps if a.stage == models.Stage.NEGOTIATION)
         out.append(
             {
                 "resume": resume.label,
                 "applications": len(apps),
                 "furthest_stage": models.STAGE_ORDER[furthest].value if furthest >= 0 else None,
-                "offers": offers,
+                "reached_negotiation": reached_negotiation,
             }
         )
     return {"resume_traction": out}

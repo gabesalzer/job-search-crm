@@ -115,8 +115,8 @@ History only ever reflects real pipeline movement.
   features).
 - **Middle level — pipeline.** Track which applications are at which stage. Because
   Stage History is append-only, this becomes a measurable funnel rather than a
-  snapshot, which lets you compute stage-to-stage conversion (e.g. "recruiter
-  screen → onsite"). Pair `stage` with a `lost_reason` picklist (ghosted, rejected
+  snapshot, which lets you compute stage-to-stage conversion (e.g. "Discovery →
+  Takehome"). Pair `stage` with a `lost_reason` picklist (ghosted, rejected
   after screen, rejected after onsite, declined by me, …) — that's the field that
   answers *where and why* you fall off.
 - **Analysis questions the model supports:** which resume versions progress; which
@@ -129,11 +129,57 @@ History only ever reflects real pipeline movement.
 
 Ordered pipeline (Opportunity-style), stored as an enum:
 
-`Saved → Applied → Recruiter Screen → Hiring Manager Screen → Onsite / Technical → Offer → Closed Won / Closed Lost`
+`Qualification → Discovery → Takehome → Executive Signoff → Negotiation → Closed Won / Closed Lost`
 
 Every time `stage` changes, a Stage History row is written automatically
 (`from_stage`, `to_stage`, `changed_at`) via a SQLAlchemy attribute event
 listener, so the funnel is captured without relying on the caller to remember.
+
+**Why macro, decision-oriented stages instead of literal interview-call
+names** (the original v1 model was `Saved → Applied → Recruiter Screen →
+Hiring Manager Screen → Onsite / Technical → Offer`): a stage model built
+around *which specific call this is* doesn't generalize, because every
+employer structures their loop differently — some skip a recruiter screen,
+some run five rounds, some replace the onsite with a takehome. Sales
+opportunity stages don't work that way either: they're built around the
+*seller's own* qualification and pursuit logic (would this deal close if we
+invested further?), not a mirror of the buyer's internal process, precisely
+because every buyer's process differs too. The current stages follow that
+same discipline — each one is a question you can answer about your own
+pursuit of the role, not a specific call type:
+
+- **Qualification** — is this worth pursuing at all (folds what used to be
+  Saved + Applied — both describe "not yet meaningfully engaged").
+- **Discovery** — how strong a fit, in both directions (folds Recruiter
+  Screen + Hiring Manager Screen — both are mutual fact-finding, just at
+  different depths).
+- **Takehome** — can you actually do the work, proven concretely. Named for
+  the specific artifact rather than a generic "Technical," since RevOps
+  hiring loops reliably include some form of takehome exercise even when
+  they're not coding-specific.
+- **Executive Signoff** — final internal approval, whether or not you're
+  ever in the room for it — the candidate-side equivalent of a deal needing
+  an economic buyer's blessing.
+- **Negotiation** — an offer is on the table.
+
+A **Go/No-Go** stage (used in the original sales version to confirm a
+completed trial had a real path to close) was deliberately left out: a
+seller can gather real signals for that call — confirmed budget, an
+identified economic buyer, competitive standing — and has the leverage to
+decline running a costly POC without them. A candidate has neither the
+visibility nor the leverage to make that judgment about an employer before
+an onsite/takehome loop, so forcing the stage would mean pretending to know
+something you can't actually know. Applications aren't required to touch
+every stage in order — a given company might skip Takehome entirely, or
+fold Executive Signoff into the same conversation as Negotiation.
+
+An application migrates through `data/jobsearch.db` automatically on
+deploy (see `migrate_stage_names()` in `app/database.py`) — existing
+applications and their stage history are remapped to the new names rather
+than reset, and now-redundant history rows (e.g. a logged Recruiter Screen →
+Hiring Manager Screen move, which collapses into a Discovery → Discovery
+no-op once both fold into one stage) are cleaned up rather than left as
+misleading duplicate entries.
 
 ## Ingestion & dedup (roadmap)
 

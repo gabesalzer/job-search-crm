@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from .database import Base, engine, ensure_schema
+from .database import Base, engine, ensure_schema, migrate_stage_names
 from .routers import (
     analytics,
     applications,
@@ -26,6 +26,7 @@ from .routers import (
 # (a lightweight auto-migration so schema changes don't drop your data).
 Base.metadata.create_all(bind=engine)
 ensure_schema()
+migrate_stage_names()  # one-time remap to the July 2026 macro stage model
 
 app = FastAPI(
     title="Job Search CRM",

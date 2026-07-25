@@ -50,24 +50,31 @@ class Rating(str, enum.Enum):
 
 
 class Stage(str, enum.Enum):
-    SAVED = "Saved"
-    APPLIED = "Applied"
-    RECRUITER_SCREEN = "Recruiter Screen"
-    HIRING_MANAGER_SCREEN = "Hiring Manager Screen"
-    ONSITE = "Onsite / Technical"
-    OFFER = "Offer"
+    """Macro, decision-oriented stages -- modeled on the seller's own
+    qualification/pursuit logic (like a sales opportunity), not a literal
+    mirror of any one employer's interview loop. That's deliberate: every
+    employer's loop is shaped differently (some skip a recruiter screen,
+    some do five rounds), so a stage model built around "which call is this"
+    doesn't generalize -- one built around your own evaluation of the
+    opportunity does. See ARCHITECTURE.md / the July 2026 stage redesign.
+    """
+
+    QUALIFICATION = "Qualification"     # is this worth pursuing at all
+    DISCOVERY = "Discovery"             # how strong a fit, both directions
+    TAKEHOME = "Takehome"               # proof you can do the work
+    EXECUTIVE_SIGNOFF = "Executive Signoff"  # final internal approval, seen or not
+    NEGOTIATION = "Negotiation"         # offer is on the table
     CLOSED_WON = "Closed Won"
     CLOSED_LOST = "Closed Lost"
 
 
 # Ordered list used for funnel/conversion analysis and UI ordering.
 STAGE_ORDER = [
-    Stage.SAVED,
-    Stage.APPLIED,
-    Stage.RECRUITER_SCREEN,
-    Stage.HIRING_MANAGER_SCREEN,
-    Stage.ONSITE,
-    Stage.OFFER,
+    Stage.QUALIFICATION,
+    Stage.DISCOVERY,
+    Stage.TAKEHOME,
+    Stage.EXECUTIVE_SIGNOFF,
+    Stage.NEGOTIATION,
     Stage.CLOSED_WON,
 ]
 
@@ -203,7 +210,7 @@ class JobApplication(Base):
         Integer, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
-    stage = Column(Enum(Stage), nullable=False, default=Stage.SAVED, index=True)
+    stage = Column(Enum(Stage), nullable=False, default=Stage.QUALIFICATION, index=True)
     lost_reason = Column(Enum(LostReason))  # only meaningful when Closed Lost
 
     title = Column(String(512))  # denormalized role title for convenience
