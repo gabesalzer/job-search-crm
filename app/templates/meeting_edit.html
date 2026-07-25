@@ -4,6 +4,16 @@
 <h1>Edit meeting</h1>
 <p class="subtitle"><a href="/meetings">← Back to Meetings</a></p>
 
+{% if meeting.application %}
+<p style="font-size:0.85rem;color:var(--muted);margin:-0.6rem 0 1.1rem">
+  For <a href="/applications/{{ meeting.application.id }}/edit"><strong>{{ meeting.application.title or "Untitled" }}</strong></a>
+  {% if meeting.application.company %} at {{ meeting.application.company.name }}{% endif %}
+  {% if meeting.application.job_posting %} · JD: {{ meeting.application.job_posting.title }}{% endif %}
+  {% if meeting.application.resume %} · Resume: {{ meeting.application.resume.label }}{% endif %}
+  — use the <em>Application</em> field below to move this meeting to a different application.
+</p>
+{% endif %}
+
 <div class="panel" style="max-width:760px">
   {% if granola_enabled %}
   <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;padding:0.1rem 0 0.6rem">

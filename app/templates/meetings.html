@@ -4,7 +4,7 @@
 <h1>Meetings</h1>
 <p class="subtitle">Interviews and calls, attached to an application. Capture the summary and transcript — the questions asked live in the transcript, and through the application they connect to the JD and the resume you used.</p>
 
-<details class="newform" {% if not meetings %}open{% endif %}>
+<details class="newform" {% if not meetings or preselect_application_id %}open{% endif %}>
   <summary>New meeting</summary>
 
   {% if applications %}
@@ -28,7 +28,7 @@
         <label>Application</label>
         <select name="application_id" required>
           {% for a in applications %}
-          <option value="{{ a.id }}">{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
+          <option value="{{ a.id }}" {% if preselect_application_id==a.id %}selected{% endif %}>{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
           {% endfor %}
         </select>
       </div>
@@ -64,7 +64,7 @@
       {% if m.meeting_type %}<span class="pill">{{ m.meeting_type.value }}</span>{% endif %}
     </div>
     <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
-      {{ m.application.title or "Untitled" if m.application else "—" }}
+      {% if m.application %}<a href="/applications/{{ m.application.id }}/edit">{{ m.application.title or "Untitled" }}</a>{% else %}—{% endif %}
       {% if m.application and m.application.company %} · {{ m.application.company.name }}{% endif %}
       {% if m.meeting_date %} · {{ m.meeting_date.strftime("%b %d, %Y") }}{% endif %}
     </div>
@@ -75,7 +75,13 @@
       {% if m.transcript %}{{ m.transcript|length }} chars of transcript{% else %}no transcript{% endif %}
       {% if m.granola_link %} · <a href="{{ m.granola_link }}" target="_blank" rel="noopener">Granola ↗</a>{% endif %}
     </div>
-    <div style="margin-top:0.4rem"><a href="/meetings/{{ m.id }}/edit" style="font-size:0.78rem">Edit</a></div>
+    <div class="row-actions">
+      <a href="/meetings/{{ m.id }}/edit">Edit</a>
+      <form method="post" action="/ui/meetings/{{ m.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Delete this meeting ({{ m.title or 'Untitled' }})? This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 </div>

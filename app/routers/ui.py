@@ -136,6 +136,14 @@ def update_application_ui(
     return RedirectResponse(url="/board", status_code=303)
 
 
+@router.post("/ui/applications/{application_id}/delete")
+def delete_application_ui(application_id: int, db: Session = Depends(get_db)):
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    db.delete(app_obj)  # cascades to stage_history and meetings
+    db.commit()
+    return RedirectResponse(url="/board", status_code=303)
+
+
 # --------------------------------------------------------------------------- #
 # Postings (triage + rating loop)
 # --------------------------------------------------------------------------- #
@@ -289,6 +297,14 @@ def update_posting_ui(
     return RedirectResponse(url="/postings", status_code=303)
 
 
+@router.post("/ui/postings/{posting_id}/delete")
+def delete_posting_ui(posting_id: int, db: Session = Depends(get_db)):
+    posting = _get_or_404(db, models.JobPosting, posting_id)
+    db.delete(posting)  # applications pointing here just lose the link (SET NULL)
+    db.commit()
+    return RedirectResponse(url="/postings", status_code=303)
+
+
 # --------------------------------------------------------------------------- #
 # Companies
 # --------------------------------------------------------------------------- #
@@ -345,6 +361,14 @@ def update_company_ui(
     company.website = website or None
     company.industry = industry or None
     company.notes = notes or None
+    db.commit()
+    return RedirectResponse(url="/companies", status_code=303)
+
+
+@router.post("/ui/companies/{company_id}/delete")
+def delete_company_ui(company_id: int, db: Session = Depends(get_db)):
+    company = _get_or_404(db, models.Company, company_id)
+    db.delete(company)  # cascades to its postings, applications, and people
     db.commit()
     return RedirectResponse(url="/companies", status_code=303)
 
@@ -442,6 +466,14 @@ def update_resume_ui(
     return RedirectResponse(url="/resumes", status_code=303)
 
 
+@router.post("/ui/resumes/{resume_id}/delete")
+def delete_resume_ui(resume_id: int, db: Session = Depends(get_db)):
+    resume = _get_or_404(db, models.Resume, resume_id)
+    db.delete(resume)  # applications using it just lose the link (SET NULL)
+    db.commit()
+    return RedirectResponse(url="/resumes", status_code=303)
+
+
 # --------------------------------------------------------------------------- #
 # Meetings (interviews / calls, optionally imported from Granola)
 # --------------------------------------------------------------------------- #
@@ -456,12 +488,15 @@ def _parse_dt(value: str):
 
 
 @router.get("/meetings")
-def meetings_page(request: Request, db: Session = Depends(get_db)):
+def meetings_page(
+    request: Request, application_id: Optional[int] = None, db: Session = Depends(get_db)
+):
     return templates.TemplateResponse(request, "meetings.html", {
         "active": "meetings",
         "meetings": db.query(models.Meeting).order_by(models.Meeting.created_at.desc()).all(),
         "applications": db.query(models.JobApplication).all(),
         "meeting_types": [t.value for t in models.MeetingType],
+        "preselect_application_id": application_id,
         "granola_enabled": granola.enabled(),
     })
 
@@ -537,5 +572,13 @@ def update_meeting_ui(
     meeting.notes = notes or None
     meeting.granola_note_id = granola_note_id or None
     meeting.granola_link = granola_link or None
+    db.commit()
+    return RedirectResponse(url="/meetings", status_code=303)
+
+
+@router.post("/ui/meetings/{meeting_id}/delete")
+def delete_meeting_ui(meeting_id: int, db: Session = Depends(get_db)):
+    meeting = _get_or_404(db, models.Meeting, meeting_id)
+    db.delete(meeting)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)

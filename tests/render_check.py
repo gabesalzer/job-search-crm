@@ -42,16 +42,17 @@ resume = SimpleNamespace(
 
 app_obj = SimpleNamespace(
     id=4, title="Sr. RevOps Manager", company_id=1, company=company, stage=enum("Applied"),
-    lost_reason=None, resume_id=3, resume=resume, job_posting_id=2,
-    applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane",
+    lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
+    applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
 )
 
 meeting = SimpleNamespace(
     id=5, title="Interview with Plaid", meeting_type=enum("Hiring Manager"),
     meeting_date=datetime(2026, 7, 10, 15, 0), summary="Went well", transcript="Me: Hi\nThem: Hi",
     notes="", granola_note_id="abc123", granola_link="https://granola.ai/notes/abc123",
-    application=app_obj,
+    application_id=4, application=app_obj,
 )
+app_obj.meetings = [meeting]  # circular-ish, but fine for a render smoke test
 
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),

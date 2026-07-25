@@ -71,6 +71,33 @@
     </div>
   </form>
 </div>
+
+<div style="max-width:720px;margin-top:1.4rem">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem">
+    <h2 style="font-size:1rem;margin:0">Meetings <span style="color:var(--neutral);font-weight:400">({{ app_obj.meetings|length }})</span></h2>
+    <a href="/meetings?application_id={{ app_obj.id }}" class="btn secondary" style="font-size:0.8rem;padding:0.35rem 0.7rem">+ Log a meeting</a>
+  </div>
+  {% if app_obj.meetings %}
+  <div class="panel" style="padding:0">
+    {% for m in app_obj.meetings %}
+    <div style="padding:0.7rem 1rem;{% if not loop.last %}border-bottom:1px solid var(--line){% endif %}">
+      <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+        <div>
+          <a href="/meetings/{{ m.id }}/edit"><strong>{{ m.title or "Untitled meeting" }}</strong></a>
+          {% if m.meeting_type %}<span class="pill" style="margin-left:0.4rem">{{ m.meeting_type.value }}</span>{% endif %}
+        </div>
+        {% if m.meeting_date %}<span style="font-size:0.78rem;color:var(--muted);white-space:nowrap">{{ m.meeting_date.strftime("%b %d, %Y") }}</span>{% endif %}
+      </div>
+      <div style="font-size:0.75rem;color:var(--neutral);margin-top:0.25rem">
+        {% if m.transcript %}{{ m.transcript|length }} chars of transcript{% else %}no transcript yet{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No meetings logged for this application yet.</p>
+  {% endif %}
+</div>
 {% endblock %}
 
 {% block scripts %}
