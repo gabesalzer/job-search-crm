@@ -44,6 +44,10 @@ app_obj = SimpleNamespace(
     id=4, title="Sr. RevOps Manager", company_id=1, company=company, stage=enum("Applied"),
     lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
+    stage_history=[
+        SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
+        SimpleNamespace(id=11, from_stage=enum("Saved"), to_stage=enum("Applied"), changed_at=datetime(2026, 7, 1, 10, 0)),
+    ],
 )
 
 meeting = SimpleNamespace(
@@ -53,6 +57,12 @@ meeting = SimpleNamespace(
     application_id=4, application=app_obj,
 )
 app_obj.meetings = [meeting]  # circular-ish, but fine for a render smoke test
+
+person = SimpleNamespace(
+    id=6, name="Jane Doe", company_id=1, company=company, role=enum("Recruiter"),
+    email="jane@plaid.com", phone="555-1234", linkedin="https://linkedin.com/in/janedoe",
+    is_champion=1, notes="Very responsive", application_id=4, application=app_obj,
+)
 
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
@@ -82,6 +92,18 @@ cases = [
         "active": "board", "stages": ["Saved", "Applied"],
         "grouped": {"Saved": [], "Applied": [app_obj]}, "companies": [company],
         "resumes": [resume], "postings": [posting],
+    }),
+    ("people.html", {
+        "active": "people", "people": [person], "companies": [company],
+        "applications": [app_obj], "person_roles": ["Recruiter", "Hiring Manager"],
+    }),
+    ("people.html (no companies)", {
+        "active": "people", "people": [], "companies": [], "applications": [],
+        "person_roles": ["Recruiter"],
+    }),
+    ("person_edit.html", {
+        "active": "people", "person": person, "companies": [company],
+        "applications": [app_obj], "person_roles": ["Recruiter", "Hiring Manager"],
     }),
 ]
 

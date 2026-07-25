@@ -32,6 +32,7 @@ router = APIRouter(tags=["ui"], include_in_schema=False)
 STAGE_VALUES = [s.value for s in models.Stage]          # ordered; Closed Lost last
 COMPANY_TYPES = [t.value for t in models.CompanyType]
 LOST_REASON_VALUES = [r.value for r in models.LostReason]
+PERSON_ROLE_VALUES = [r.value for r in models.PersonRole]
 
 
 def _get_or_404(db: Session, model, obj_id: int):
@@ -142,6 +143,26 @@ def delete_application_ui(application_id: int, db: Session = Depends(get_db)):
     db.delete(app_obj)  # cascades to stage_history and meetings
     db.commit()
     return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/ui/stage-history/{history_id}/edit")
+def update_stage_history_ui(
+    history_id: int,
+    changed_at: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Correct when a stage change actually happened. The board/edit-form
+    stage change always logs `changed_at` as the moment you clicked/dragged
+    in the app -- which is often later than the real-world transition. This
+    lets you fix that after the fact without touching the stage itself
+    (from_stage/to_stage stay as recorded; only the timestamp changes).
+    """
+    history = _get_or_404(db, models.StageHistory, history_id)
+    new_dt = _parse_dt(changed_at)
+    if new_dt:
+        history.changed_at = new_dt
+    db.commit()
+    return RedirectResponse(url=f"/applications/{history.application_id}/edit", status_code=303)
 
 
 # --------------------------------------------------------------------------- #
@@ -582,3 +603,96 @@ def delete_meeting_ui(meeting_id: int, db: Session = Depends(get_db)):
     db.delete(meeting)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# People (Contacts): recruiters, hiring managers, interviewers, referrals.
+# Their "own" employer (company_id) is deliberately independent of whichever
+# application they're optionally tied to -- an agency recruiter's employer is
+# the agency, not the company you're interviewing at. See ARCHITECTURE.md.
+# --------------------------------------------------------------------------- #
+@router.get("/people")
+def people_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(request, "people.html", {
+        "active": "people",
+        "people": db.query(models.Person).order_by(models.Person.name).all(),
+        "companies": db.query(models.Company).order_by(models.Company.name).all(),
+        "applications": db.query(models.JobApplication).all(),
+        "person_roles": PERSON_ROLE_VALUES,
+    })
+
+
+@router.post("/ui/people")
+def create_person_ui(
+    name: str = Form(...),
+    company_id: int = Form(...),
+    application_id: Optional[str] = Form(None),
+    role: str = Form("Recruiter"),
+    email: str = Form(""),
+    phone: str = Form(""),
+    linkedin: str = Form(""),
+    is_champion: Optional[str] = Form(None),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    db.add(models.Person(
+        name=name,
+        company_id=company_id,
+        application_id=int(application_id) if application_id else None,
+        role=models.PersonRole(role),
+        email=email or None,
+        phone=phone or None,
+        linkedin=linkedin or None,
+        is_champion=1 if is_champion else 0,
+        notes=notes or None,
+    ))
+    db.commit()
+    return RedirectResponse(url="/people", status_code=303)
+
+
+@router.get("/people/{person_id}/edit")
+def edit_person_page(person_id: int, request: Request, db: Session = Depends(get_db)):
+    person = _get_or_404(db, models.Person, person_id)
+    return templates.TemplateResponse(request, "person_edit.html", {
+        "active": "people",
+        "person": person,
+        "companies": db.query(models.Company).order_by(models.Company.name).all(),
+        "applications": db.query(models.JobApplication).all(),
+        "person_roles": PERSON_ROLE_VALUES,
+    })
+
+
+@router.post("/ui/people/{person_id}/edit")
+def update_person_ui(
+    person_id: int,
+    name: str = Form(...),
+    company_id: int = Form(...),
+    application_id: Optional[str] = Form(None),
+    role: str = Form("Recruiter"),
+    email: str = Form(""),
+    phone: str = Form(""),
+    linkedin: str = Form(""),
+    is_champion: Optional[str] = Form(None),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    person = _get_or_404(db, models.Person, person_id)
+    person.name = name
+    person.company_id = company_id
+    person.application_id = int(application_id) if application_id else None
+    person.role = models.PersonRole(role)
+    person.email = email or None
+    person.phone = phone or None
+    person.linkedin = linkedin or None
+    person.is_champion = 1 if is_champion else 0
+    person.notes = notes or None
+    db.commit()
+    return RedirectResponse(url="/people", status_code=303)
+
+
+@router.post("/ui/people/{person_id}/delete")
+def delete_person_ui(person_id: int, db: Session = Depends(get_db)):
+    person = _get_or_404(db, models.Person, person_id)
+    db.delete(person)  # no children -- nothing else is affected
+    db.commit()
+    return RedirectResponse(url="/people", status_code=303)
