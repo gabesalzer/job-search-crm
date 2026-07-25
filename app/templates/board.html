@@ -60,7 +60,13 @@
       <div class="card" draggable="true" data-id="{{ app.id }}">
         <div style="display:flex;justify-content:space-between;gap:0.4rem;align-items:start">
           <div class="title">{{ app.title or "Untitled role" }}</div>
-          <a href="/applications/{{ app.id }}/edit" title="Edit" style="font-size:0.78rem;flex:0 0 auto">Edit</a>
+          <div class="row-actions" style="margin-top:0;flex:0 0 auto">
+            <a href="/applications/{{ app.id }}/edit" title="Edit">Edit</a>
+            <form method="post" action="/ui/applications/{{ app.id }}/delete" class="inline-form"
+                  onsubmit="return confirm('Delete this application ({{ app.title or 'Untitled role' }})? This also deletes its stage history and any meetings logged against it. This cannot be undone.');">
+              <button type="submit" class="linkbtn danger" title="Delete">Delete</button>
+            </form>
+          </div>
         </div>
         <div class="co">{{ app.company.name if app.company else "—" }}</div>
         <div class="metarow">

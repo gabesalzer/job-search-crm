@@ -37,7 +37,13 @@
     <div style="font-size:0.76rem;color:var(--neutral);margin-top:0.55rem">
       {{ c.applications|length }} application(s) · {{ c.postings|length }} posting(s) · {{ c.people|length }} contact(s)
     </div>
-    <div style="margin-top:0.5rem"><a href="/companies/{{ c.id }}/edit" style="font-size:0.78rem">Edit</a></div>
+    <div class="row-actions">
+      <a href="/companies/{{ c.id }}/edit">Edit</a>
+      <form method="post" action="/ui/companies/{{ c.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Delete {{ c.name }}? This also deletes its {{ c.postings|length }} posting(s), {{ c.applications|length }} application(s), and {{ c.people|length }} contact(s). This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 </div>

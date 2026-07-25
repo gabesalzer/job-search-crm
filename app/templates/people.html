@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}People · Job Search CRM{% endblock %}
+{% block body %}
+<h1>People</h1>
+<p class="subtitle">Recruiters, hiring managers, interviewers, and referrals. A person's company is their <em>own</em> employer — for an agency recruiter, that's the agency, independent of whichever application they're helping you with.</p>
+
+<details class="newform" {% if not people %}open{% endif %}>
+  <summary>New person</summary>
+  {% if companies %}
+  <form method="post" action="/ui/people">
+    <div class="form-grid">
+      <div class="field"><label>Name</label><input name="name" required></div>
+      <div class="field">
+        <label>Company</label>
+        <select name="company_id" required>
+          {% for c in companies %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Role</label>
+        <select name="role">
+          {% for r in person_roles %}<option value="{{ r }}" {% if r=="Recruiter" %}selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Associated application (optional)</label>
+        <select name="application_id">
+          <option value="">— none —</option>
+          {% for a in applications %}
+          <option value="{{ a.id }}">{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Email</label><input name="email" type="email"></div>
+      <div class="field"><label>Phone</label><input name="phone"></div>
+      <div class="field"><label>LinkedIn</label><input name="linkedin" placeholder="https://linkedin.com/in/..."></div>
+    </div>
+    <div class="field" style="margin-top:0.3rem;display:flex;align-items:center;gap:0.4rem">
+      <input type="checkbox" name="is_champion" value="1" id="isChampionNew" style="width:auto">
+      <label for="isChampionNew" style="margin:0">Champion — rooting for you, worth staying warm with</label>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Notes</label>
+      <textarea name="notes" rows="2"></textarea>
+    </div>
+    <div style="margin-top:0.6rem"><button class="btn" type="submit">Add person</button></div>
+  </form>
+  {% else %}
+  <p class="empty">Add a company first on the <a href="/companies">Companies</a> tab, then you can add people.</p>
+  {% endif %}
+</details>
+
+{% if people %}
+<div class="grid">
+  {% for p in people %}
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+      <strong>{{ p.name }}</strong>
+      <span class="pill">{{ p.role.value if p.role else "—" }}</span>
+    </div>
+    <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
+      {{ p.company.name if p.company else "—" }}
+      {% if p.is_champion %} · <span class="pill up">★ Champion</span>{% endif %}
+    </div>
+    {% if p.application %}
+    <div style="font-size:0.78rem;color:var(--neutral);margin-top:0.35rem">
+      Re: <a href="/applications/{{ p.application.id }}/edit">{{ p.application.title or "Untitled" }}</a>
+    </div>
+    {% endif %}
+    <div style="font-size:0.78rem;color:var(--muted);margin-top:0.4rem">
+      {% if p.email %}{{ p.email }}<br>{% endif %}
+      {% if p.phone %}{{ p.phone }}<br>{% endif %}
+      {% if p.linkedin %}<a href="{{ p.linkedin }}" target="_blank" rel="noopener">LinkedIn ↗</a>{% endif %}
+    </div>
+    {% if p.notes %}<div style="font-size:0.75rem;color:var(--neutral);margin-top:0.35rem">{{ p.notes }}</div>{% endif %}
+    <div class="row-actions">
+      <a href="/people/{{ p.id }}/edit">Edit</a>
+      <form method="post" action="/ui/people/{{ p.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Delete {{ p.name }}? This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No people yet — add one above.</p>
+{% endif %}
+{% endblock %}

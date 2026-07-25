@@ -5,7 +5,7 @@
 <p class="subtitle"><a href="/postings">← Back to Postings</a></p>
 
 <div class="panel" style="max-width:760px">
-  <form method="post" action="/ui/postings/{{ posting.id }}/edit">
+  <form method="post" action="/ui/postings/{{ posting.id }}/edit" id="editPostingForm">
     <div class="form-grid">
       <div class="field">
         <label>Company</label>
@@ -16,18 +16,81 @@
       <div class="field"><label>Comp min</label><input name="comp_min" type="number" step="any" value="{{ posting.comp_min if posting.comp_min is not none else '' }}"></div>
       <div class="field"><label>Comp max</label><input name="comp_max" type="number" step="any" value="{{ posting.comp_max if posting.comp_max is not none else '' }}"></div>
     </div>
-    <div class="field" style="margin-top:0.5rem"><label>URL</label><input name="url" value="{{ posting.url or '' }}" placeholder="https://"></div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>URL</label>
+      <div style="display:flex;gap:0.5rem;align-items:center">
+        <input name="url" id="postingUrl" value="{{ posting.url or '' }}" placeholder="https://" style="flex:1">
+        <button type="button" class="btn secondary" id="fetchBtn" style="flex:0 0 auto">Fetch details</button>
+      </div>
+      <div id="fetchStatus" style="font-size:0.78rem;color:var(--muted);min-height:1.1em;margin-top:0.3rem"></div>
+    </div>
     <div class="field" style="margin-top:0.5rem">
       <label>Job description</label>
       <textarea name="jd_text" rows="6">{{ posting.jd_text or '' }}</textarea>
     </div>
     <p style="font-size:0.78rem;color:var(--neutral);margin:0.5rem 0 0">
       Changing the company name creates a new company if it doesn't already exist — same as when you add a posting.
+      Changing the URL auto-fetches the new page's details once you click away from the field (or hit "Fetch details" to
+      re-pull the current URL, e.g. if the listing has changed).
     </p>
     <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
       <button class="btn" type="submit">Save changes</button>
       <a class="btn secondary" href="/postings">Cancel</a>
     </div>
   </form>
+  <form method="post" action="/ui/postings/{{ posting.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
+        onsubmit="return confirm('Delete this posting ({{ posting.title }})? Any applications linked to it keep their data but lose the link. This cannot be undone.');">
+    <button type="submit" class="linkbtn danger">Delete this posting</button>
+  </form>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const urlInput = document.getElementById('postingUrl');
+  const fetchBtn = document.getElementById('fetchBtn');
+  const status = document.getElementById('fetchStatus');
+  const form = document.getElementById('editPostingForm');
+
+  async function fetchDetails() {
+    const url = urlInput.value.trim();
+    if (!url) { status.textContent = 'Paste a URL first.'; return; }
+    status.textContent = 'Fetching…';
+    fetchBtn.disabled = true;
+    try {
+      const res = await fetch('/api/postings/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        status.textContent = 'Could not fetch — ' + (d.detail || ('HTTP ' + res.status));
+        return;
+      }
+      if (d.title) form.title.value = d.title;
+      if (d.location) form.location.value = d.location;
+      urlInput.value = d.source_url || url;
+      if (d.jd_text) form.jd_text.value = d.jd_text;
+      if (d.comp_min != null) form.comp_min.value = d.comp_min;
+      if (d.comp_max != null) form.comp_max.value = d.comp_max;
+      if (d.company_name) form.company_name.value = d.company_name;
+
+      let msg = 'Loaded' + (d.title ? (' “' + d.title + '”') : '') + '.';
+      if (!d.title && !d.jd_text) {
+        msg = 'Fetched the page, but found no structured job fields — this site likely needs Firecrawl. Fill the form in manually.';
+      }
+      status.textContent = msg;
+    } catch (err) {
+      status.textContent = 'Error: ' + err;
+    } finally {
+      fetchBtn.disabled = false;
+    }
+  }
+
+  fetchBtn.addEventListener('click', fetchDetails);
+  // Auto-pull as soon as a new URL is pasted in and you click/tab away --
+  // no need to also click "Fetch details" for the common case.
+  urlInput.addEventListener('change', () => { if (urlInput.value.trim()) fetchDetails(); });
+</script>
 {% endblock %}

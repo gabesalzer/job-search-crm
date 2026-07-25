@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ person.name }} · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Edit person</h1>
+<p class="subtitle"><a href="/people">← Back to People</a></p>
+
+<div class="panel" style="max-width:680px">
+  <form method="post" action="/ui/people/{{ person.id }}/edit">
+    <div class="form-grid">
+      <div class="field"><label>Name</label><input name="name" value="{{ person.name }}" required></div>
+      <div class="field">
+        <label>Company</label>
+        <select name="company_id" required>
+          {% for c in companies %}
+          <option value="{{ c.id }}" {% if person.company_id==c.id %}selected{% endif %}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Role</label>
+        <select name="role">
+          {% for r in person_roles %}
+          <option value="{{ r }}" {% if person.role and person.role.value==r %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Associated application (optional)</label>
+        <select name="application_id">
+          <option value="">— none —</option>
+          {% for a in applications %}
+          <option value="{{ a.id }}" {% if person.application_id==a.id %}selected{% endif %}>{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Email</label><input name="email" type="email" value="{{ person.email or '' }}"></div>
+      <div class="field"><label>Phone</label><input name="phone" value="{{ person.phone or '' }}"></div>
+      <div class="field"><label>LinkedIn</label><input name="linkedin" value="{{ person.linkedin or '' }}" placeholder="https://linkedin.com/in/..."></div>
+    </div>
+    <div class="field" style="margin-top:0.3rem;display:flex;align-items:center;gap:0.4rem">
+      <input type="checkbox" name="is_champion" value="1" id="isChampionEdit" style="width:auto" {% if person.is_champion %}checked{% endif %}>
+      <label for="isChampionEdit" style="margin:0">Champion — rooting for you, worth staying warm with</label>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Notes</label>
+      <textarea name="notes" rows="3">{{ person.notes or '' }}</textarea>
+    </div>
+    <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
+      <button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/people">Cancel</a>
+    </div>
+  </form>
+  <form method="post" action="/ui/people/{{ person.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
+        onsubmit="return confirm('Delete {{ person.name }}? This cannot be undone.');">
+    <button type="submit" class="linkbtn danger">Delete this person</button>
+  </form>
+</div>
+{% endblock %}

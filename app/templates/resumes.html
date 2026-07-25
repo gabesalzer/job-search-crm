@@ -55,7 +55,13 @@
     <div style="font-size:0.78rem;color:var(--down);margin-top:0.45rem">No text extracted — try pasting the text, or re-upload.</div>
     {% endif %}
     {% if r.notes %}<div style="font-size:0.75rem;color:var(--neutral);margin-top:0.35rem">{{ r.notes }}</div>{% endif %}
-    <div style="margin-top:0.4rem"><a href="/resumes/{{ r.id }}/edit" style="font-size:0.78rem">Edit</a></div>
+    <div class="row-actions">
+      <a href="/resumes/{{ r.id }}/edit">Edit</a>
+      <form method="post" action="/ui/resumes/{{ r.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Delete {{ r.label }}? Applications using it keep their data but lose the resume link. This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 </div>

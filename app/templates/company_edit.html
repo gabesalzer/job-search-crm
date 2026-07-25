@@ -28,5 +28,9 @@
       <a class="btn secondary" href="/companies">Cancel</a>
     </div>
   </form>
+  <form method="post" action="/ui/companies/{{ company.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
+        onsubmit="return confirm('Delete {{ company.name }}? This also deletes its {{ company.postings|length }} posting(s), {{ company.applications|length }} application(s), and {{ company.people|length }} contact(s). This cannot be undone.');">
+    <button type="submit" class="linkbtn danger">Delete this company</button>
+  </form>
 </div>
 {% endblock %}

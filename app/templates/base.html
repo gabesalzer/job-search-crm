@@ -64,6 +64,12 @@
   .ratebtn.up:hover{border-color:var(--up);color:var(--up)}
   .ratebtn.down:hover{border-color:var(--down);color:var(--down)}
   .ratebtn.neutral:hover{border-color:var(--neutral)}
+  .linkbtn{background:none;border:none;padding:0;font:inherit;font-size:0.78rem;color:var(--accent);
+    cursor:pointer;text-decoration:none;width:auto}
+  .linkbtn:hover{text-decoration:underline}
+  .linkbtn.danger{color:var(--down)}
+  .inline-form{display:inline}
+  .row-actions{margin-top:0.4rem;display:flex;gap:0.7rem;align-items:center;font-size:0.78rem}
 </style>
 </head>
 <body>
@@ -75,6 +81,7 @@
     <a href="/resumes" class="{% if active=='resumes' %}active{% endif %}">Resumes</a>
     <a href="/meetings" class="{% if active=='meetings' %}active{% endif %}">Meetings</a>
     <a href="/companies" class="{% if active=='companies' %}active{% endif %}">Companies</a>
+    <a href="/people" class="{% if active=='people' %}active{% endif %}">People</a>
   </nav>
 </header>
 <main>

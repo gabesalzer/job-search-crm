@@ -75,12 +75,29 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   on which employers vs. which agencies get you traction.
 - **Meetings**: interviews and calls, attached to an application. Capture the
   summary and transcript by hand, or (with `GRANOLA_API_KEY` set) load and
-  import a note from Granola.
+  import a note from Granola. Every application's edit page shows its
+  meetings as a related list, and a meeting's edit page shows which
+  application (and, through it, which JD and resume) it belongs to.
+- **People**: recruiters, hiring managers, interviewers, referrals. A
+  person's company is their *own* employer — independent of whichever
+  application they're optionally tied to, so an agency recruiter's company
+  is the agency, not the employer you're interviewing at. Mark someone a
+  *Champion* to flag they're rooting for you.
 - **Editing**: every record type (companies, postings, resumes, applications,
-  meetings) has an *Edit* link that opens a form pre-filled with its current
-  values. For meetings, the edit page also carries the Granola import
-  controls, so you can re-pull or switch a note's transcript onto an existing
-  meeting instead of deleting and recreating it.
+  meetings, people) has an *Edit* link that opens a form pre-filled with its
+  current values — available both from each list/board view and from the
+  edit page itself. For meetings, the edit page also carries the Granola
+  import controls, so you can re-pull or switch a note's transcript onto an
+  existing meeting instead of deleting and recreating it. For postings, the
+  URL field auto-fetches a new listing's details as soon as you change it.
+- **Deleting**: every record type also has a *Delete* button, guarded by a
+  confirm dialog, available from both the list view and the edit page.
+  Deleting a company cascades to its postings, applications, and people;
+  deleting an application cascades to its stage history and meetings.
+  Deleting a posting, resume, or person just unlinks it from anything that
+  referenced it (nothing else is deleted). Stage history has no delete of
+  its own — it's an audit trail, cleaned up only as a side effect of
+  deleting its parent application.
 
 ## Data & privacy
 

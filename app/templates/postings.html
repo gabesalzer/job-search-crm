@@ -64,7 +64,13 @@
     {% if p.rating_reason %}
     <div style="font-size:0.75rem;color:var(--neutral);margin-top:0.35rem">“{{ p.rating_reason }}”</div>
     {% endif %}
-    <div style="margin-top:0.4rem"><a href="/postings/{{ p.id }}/edit" style="font-size:0.78rem">Edit</a></div>
+    <div class="row-actions">
+      <a href="/postings/{{ p.id }}/edit">Edit</a>
+      <form method="post" action="/ui/postings/{{ p.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Delete this posting ({{ p.title }})? Any applications linked to it keep their data but lose the link. This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 </div>

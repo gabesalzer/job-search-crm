@@ -30,5 +30,9 @@
       <a class="btn secondary" href="/resumes">Cancel</a>
     </div>
   </form>
+  <form method="post" action="/ui/resumes/{{ resume.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
+        onsubmit="return confirm('Delete {{ resume.label }}? Applications using it keep their data but lose the resume link. This cannot be undone.');">
+    <button type="submit" class="linkbtn danger">Delete this resume</button>
+  </form>
 </div>
 {% endblock %}
