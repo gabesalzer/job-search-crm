@@ -241,6 +241,14 @@ class JobApplication(Base):
         cascade="all, delete-orphan",
         order_by="Meeting.meeting_date",
     )
+    # Email threads optionally tied to this application (lookup from the
+    # EmailThread side — its real master is Person, not Application, so this
+    # doesn't cascade; deleting the application just clears the link).
+    email_threads = relationship(
+        "EmailThread",
+        back_populates="application",
+        order_by="EmailThread.last_message_at",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -297,6 +305,14 @@ class Person(Base):
 
     company = relationship("Company", back_populates="people")
     application = relationship("JobApplication", back_populates="people")
+    # Master-detail child: an email thread is fundamentally a conversation
+    # with this person, so it cascades with them.
+    email_threads = relationship(
+        "EmailThread",
+        back_populates="person",
+        cascade="all, delete-orphan",
+        order_by="EmailThread.last_message_at",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -341,6 +357,54 @@ class Meeting(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     application = relationship("JobApplication", back_populates="meetings")
+
+
+# --------------------------------------------------------------------------- #
+# Email Thread  (== EmailMessage/Task on a Contact): a recruiter/HM exchange
+# --------------------------------------------------------------------------- #
+class EmailThread(Base):
+    """A separate object from Meeting, not folded into it -- the shape is
+    different (subject/body/participants and a message span, vs. a single
+    dated event) and, like a Person's own company, a thread can predate any
+    Application: a cold recruiter email lands in your inbox before you've
+    decided to pursue anything. So its master is Person (you're always
+    emailing *someone*), and the Application link is an optional lookup that
+    gets set once the thread is actually about a role you're pursuing.
+    """
+
+    __tablename__ = "email_threads"
+
+    id = Column(Integer, primary_key=True)
+
+    # Master-detail to Person: cascades if the person is deleted.
+    person_id = Column(
+        Integer, ForeignKey("people.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Lookup to an application (nullable): unset for pre-application outreach.
+    application_id = Column(
+        Integer,
+        ForeignKey("job_applications.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    subject = Column(String(512))
+    body = Column(Text)                  # pasted thread content
+    participants = Column(String(512))   # free text, e.g. "jane@co.com, me@gmail.com"
+
+    started_at = Column(DateTime)        # first message in the thread
+    # Most recent message -- drives ordering, including in the combined
+    # Meetings+Emails activity timeline on the Application page, so a thread
+    # with a fresh reply surfaces near the top rather than at its original date.
+    last_message_at = Column(DateTime, index=True)
+
+    notes = Column(Text)
+
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    person = relationship("Person", back_populates="email_threads")
+    application = relationship("JobApplication", back_populates="email_threads")
 
 
 # --------------------------------------------------------------------------- #

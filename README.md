@@ -83,18 +83,31 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   application they're optionally tied to, so an agency recruiter's company
   is the agency, not the employer you're interviewing at. Mark someone a
   *Champion* to flag they're rooting for you.
+- **Emails**: recruiter/hiring-manager email threads, tied to a Person and
+  optionally to an Application (unset for pre-application outreach, e.g. a
+  cold recruiter message). Paste the thread text in, or upload a file — a
+  PDF export of the thread (Gmail's own "Print all") works especially well:
+  its text is extracted the same way a resume upload is, and if it's
+  shaped like a Gmail export, the subject, participants, and thread
+  start/last-message dates are pulled out and pre-filled automatically
+  (anything you type by hand always wins over the auto-filled value). An
+  application's edit page shows an **Activity** related list that merges its
+  meetings and email threads into one chronological timeline.
 - **Editing**: every record type (companies, postings, resumes, applications,
-  meetings, people) has an *Edit* link that opens a form pre-filled with its
-  current values — available both from each list/board view and from the
-  edit page itself. For meetings, the edit page also carries the Granola
-  import controls, so you can re-pull or switch a note's transcript onto an
-  existing meeting instead of deleting and recreating it. For postings, the
-  URL field auto-fetches a new listing's details as soon as you change it.
+  meetings, people, email threads) has an *Edit* link that opens a form
+  pre-filled with its current values — available both from each list/board
+  view and from the edit page itself. For meetings, the edit page also
+  carries the Granola import controls, so you can re-pull or switch a note's
+  transcript onto an existing meeting instead of deleting and recreating it.
+  For postings, the URL field auto-fetches a new listing's details as soon as
+  you change it.
 - **Deleting**: every record type also has a *Delete* button, guarded by a
   confirm dialog, available from both the list view and the edit page.
   Deleting a company cascades to its postings, applications, and people;
-  deleting an application cascades to its stage history and meetings.
-  Deleting a posting, resume, or person just unlinks it from anything that
+  deleting an application cascades to its stage history and meetings (and
+  clears the link on any email thread pointed at it); deleting a person
+  cascades to their email threads. Deleting a posting, resume, or
+  application-link on a person/thread just unlinks it from anything that
   referenced it (nothing else is deleted). Stage history has no delete of
   its own — it's an audit trail, cleaned up only as a side effect of
   deleting its parent application.
@@ -111,8 +124,9 @@ also gitignored.
 Implemented: the full object model, stage-history tracking, the web UI, the JSON
 API, and the URL scraper (Greenhouse/Lever APIs, JSON-LD, optional Firecrawl),
 posting-first company creation, application↔posting links, resume upload with
-text extraction, Meetings with optional Granola import, and edit forms for
-every record type.
+text extraction, Meetings with optional Granola import, Email Threads with
+Gmail-export auto-parsing, a combined Meetings+Emails activity timeline on
+each application, and edit forms for every record type.
 
 Planned next: a Firecrawl-powered bulk *search* for postings, the three-layer
 dedup pipeline, richer company enrichment, and the funnel / resume-traction

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Edit email thread · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Edit email thread</h1>
+<p class="subtitle"><a href="/email-threads">← Back to Email threads</a></p>
+
+{% if thread.application %}
+<p style="font-size:0.85rem;color:var(--muted);margin:-0.6rem 0 1.1rem">
+  For <a href="/applications/{{ thread.application.id }}/edit"><strong>{{ thread.application.title or "Untitled" }}</strong></a>
+  {% if thread.application.company %} at {{ thread.application.company.name }}{% endif %}
+  — use the <em>Application</em> field below to move this thread to a different application, or clear it if it's not about a specific role.
+</p>
+{% endif %}
+
+<div class="panel" style="max-width:760px">
+  <form method="post" action="/ui/email-threads/{{ thread.id }}/edit" enctype="multipart/form-data">
+    <div class="form-grid">
+      <div class="field">
+        <label>Person</label>
+        <select name="person_id" required>
+          {% for p in people %}
+          <option value="{{ p.id }}" {% if thread.person_id==p.id %}selected{% endif %}>{{ p.name }} — {{ p.company.name if p.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Application (optional)</label>
+        <select name="application_id">
+          <option value="">— none —</option>
+          {% for a in applications %}
+          <option value="{{ a.id }}" {% if thread.application_id==a.id %}selected{% endif %}>{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Subject</label><input name="subject" value="{{ thread.subject or '' }}"></div>
+      <div class="field"><label>Participants</label><input name="participants" value="{{ thread.participants or '' }}" placeholder="jane@co.com, me@gmail.com"></div>
+      <div class="field">
+        <label>Thread started</label>
+        <input name="started_at" type="datetime-local" value="{{ thread.started_at.strftime('%Y-%m-%dT%H:%M') if thread.started_at else '' }}">
+      </div>
+      <div class="field">
+        <label>Most recent message</label>
+        <input name="last_message_at" type="datetime-local" value="{{ thread.last_message_at.strftime('%Y-%m-%dT%H:%M') if thread.last_message_at else '' }}">
+      </div>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Re-upload thread (PDF / DOCX / TXT — optional, replaces the body below)</label>
+      <input name="file" type="file" accept=".pdf,.docx,.txt,.md">
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>Body</label><textarea name="body" rows="10">{{ thread.body or '' }}</textarea></div>
+    <div class="field" style="margin-top:0.5rem"><label>Your notes (optional)</label><input name="notes" value="{{ thread.notes or '' }}"></div>
+    <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
+      <button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/email-threads">Cancel</a>
+    </div>
+  </form>
+  <form method="post" action="/ui/email-threads/{{ thread.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
+        onsubmit="return confirm('Delete this email thread ({{ thread.subject or 'Untitled' }})? This cannot be undone.');">
+    <button type="submit" class="linkbtn danger">Delete this email thread</button>
+  </form>
+</div>
+{% endblock %}

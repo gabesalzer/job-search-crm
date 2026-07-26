@@ -44,6 +44,7 @@ app_obj = SimpleNamespace(
     id=4, title="Sr. RevOps Manager", company_id=1, company=company, stage=enum("Applied"),
     lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
+    email_threads=[],
     stage_history=[
         SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
         SimpleNamespace(id=11, from_stage=enum("Saved"), to_stage=enum("Applied"), changed_at=datetime(2026, 7, 1, 10, 0)),
@@ -62,7 +63,22 @@ person = SimpleNamespace(
     id=6, name="Jane Doe", company_id=1, company=company, role=enum("Recruiter"),
     email="jane@plaid.com", phone="555-1234", linkedin="https://linkedin.com/in/janedoe",
     is_champion=1, notes="Very responsive", application_id=4, application=app_obj,
+    email_threads=[],
 )
+
+thread = SimpleNamespace(
+    id=7, subject="Re: Sr. RevOps Manager role", body="Hi Jane,\n\nThanks for reaching out...",
+    participants="jane@plaid.com, me@gmail.com", started_at=datetime(2026, 6, 20, 9, 0),
+    last_message_at=datetime(2026, 6, 22, 14, 30), notes="Follow up next week",
+    person_id=6, person=person, application_id=4, application=app_obj,
+)
+person.email_threads = [thread]
+app_obj.email_threads = [thread]
+
+activity = [
+    {"type": "Email", "when": thread.last_message_at, "title": thread.subject, "sub": person.name, "url": f"/email-threads/{thread.id}/edit"},
+    {"type": "Meeting", "when": meeting.meeting_date, "title": meeting.title, "sub": meeting.meeting_type.value, "url": f"/meetings/{meeting.id}/edit"},
+]
 
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
@@ -71,7 +87,7 @@ cases = [
     ("application_edit.html", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
-        "postings": [posting],
+        "postings": [posting], "activity": activity,
     }),
     ("meeting_edit.html", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],
@@ -104,6 +120,17 @@ cases = [
     ("person_edit.html", {
         "active": "people", "person": person, "companies": [company],
         "applications": [app_obj], "person_roles": ["Recruiter", "Hiring Manager"],
+    }),
+    ("email_threads.html", {
+        "active": "emails", "threads": [thread], "people": [person], "applications": [app_obj],
+        "preselect_person_id": None, "preselect_application_id": None,
+    }),
+    ("email_threads.html (empty)", {
+        "active": "emails", "threads": [], "people": [], "applications": [],
+        "preselect_person_id": None, "preselect_application_id": None,
+    }),
+    ("email_thread_edit.html", {
+        "active": "emails", "thread": thread, "people": [person], "applications": [app_obj],
     }),
 ]
 

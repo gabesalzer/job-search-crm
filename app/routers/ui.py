@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..database import get_db
 from ..services import granola
+from ..services.email_parse import parse_gmail_export
 from ..services.resume_extract import extract_text
 
 # templates/ lives next to app/, resolved relative to this file so it works
@@ -88,6 +89,37 @@ def create_application_ui(
     return RedirectResponse(url="/board", status_code=303)
 
 
+def _activity_timeline(app_obj: models.JobApplication) -> list[dict]:
+    """Merge Meetings and Email Threads into one chronologically-sorted list
+    for the Application page. Purely a display-layer merge (no new table,
+    no schema change) -- each side keeps its own shape, we just normalize
+    both into a common {type, when, title, sub, url} dict and sort by the
+    timestamp that best represents "most recent activity" for that row:
+    meeting_date for a Meeting, last_message_at for an Email Thread (so a
+    thread with a fresh reply surfaces near the top, not buried at the date
+    it started).
+    """
+    rows: list[dict] = []
+    for m in app_obj.meetings:
+        rows.append({
+            "type": "Meeting",
+            "when": m.meeting_date,
+            "title": m.title or "Untitled meeting",
+            "sub": m.meeting_type.value if m.meeting_type else None,
+            "url": f"/meetings/{m.id}/edit",
+        })
+    for t in app_obj.email_threads:
+        rows.append({
+            "type": "Email",
+            "when": t.last_message_at or t.started_at,
+            "title": t.subject or "Untitled thread",
+            "sub": t.person.name if t.person else None,
+            "url": f"/email-threads/{t.id}/edit",
+        })
+    rows.sort(key=lambda r: r["when"] or datetime.min, reverse=True)
+    return rows
+
+
 @router.get("/applications/{application_id}/edit")
 def edit_application_page(application_id: int, request: Request, db: Session = Depends(get_db)):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
@@ -101,6 +133,7 @@ def edit_application_page(application_id: int, request: Request, db: Session = D
         "postings": db.query(models.JobPosting)
         .order_by(models.JobPosting.last_seen_at.desc())
         .all(),
+        "activity": _activity_timeline(app_obj),
     })
 
 
@@ -508,6 +541,22 @@ def _parse_dt(value: str):
         return None
 
 
+def _extract_upload_text(file: Optional[UploadFile]) -> str:
+    """Extract text from an uploaded file (PDF/DOCX/TXT), reusing the same
+    extractor Resume upload uses. Returns "" if there's no file, an empty
+    file, or extraction fails -- callers fall back to pasted text either way.
+    """
+    if file is None or not file.filename:
+        return ""
+    data = file.file.read()
+    if not data:
+        return ""
+    try:
+        return extract_text(file.filename, data)
+    except Exception:
+        return ""
+
+
 @router.get("/meetings")
 def meetings_page(
     request: Request, application_id: Optional[int] = None, db: Session = Depends(get_db)
@@ -693,6 +742,125 @@ def update_person_ui(
 @router.post("/ui/people/{person_id}/delete")
 def delete_person_ui(person_id: int, db: Session = Depends(get_db)):
     person = _get_or_404(db, models.Person, person_id)
-    db.delete(person)  # no children -- nothing else is affected
+    db.delete(person)  # cascades to that person's email threads
     db.commit()
     return RedirectResponse(url="/people", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Email Threads: recruiter/HM email exchanges, pasted in manually for now.
+# Master is Person (a thread is always a conversation with someone, and can
+# predate any application, e.g. cold outreach); Application is an optional
+# lookup set once the thread is actually about a role. See ARCHITECTURE.md.
+# --------------------------------------------------------------------------- #
+@router.get("/email-threads")
+def email_threads_page(
+    request: Request,
+    person_id: Optional[int] = None,
+    application_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    return templates.TemplateResponse(request, "email_threads.html", {
+        "active": "emails",
+        "threads": db.query(models.EmailThread)
+        .order_by(models.EmailThread.last_message_at.desc().nullslast())
+        .all(),
+        "people": db.query(models.Person).order_by(models.Person.name).all(),
+        "applications": db.query(models.JobApplication).all(),
+        "preselect_person_id": person_id,
+        "preselect_application_id": application_id,
+    })
+
+
+@router.post("/ui/email-threads")
+def create_email_thread_ui(
+    person_id: int = Form(...),
+    application_id: Optional[str] = Form(None),
+    subject: str = Form(""),
+    body: str = Form(""),
+    participants: str = Form(""),
+    started_at: str = Form(""),
+    last_message_at: str = Form(""),
+    notes: str = Form(""),
+    file: UploadFile = File(None),
+    db: Session = Depends(get_db),
+):
+    """Create an email thread. Same dual-input pattern as Resume: paste the
+    text directly, or upload a file (a PDF export/print of the thread works
+    great) and it gets extracted automatically via the same extractor Resume
+    uses. An uploaded file wins over pasted text when both are present.
+
+    If the text looks like a Gmail thread export, subject/participants/dates
+    are auto-filled from it -- but only into fields you left blank, so
+    anything you typed by hand always wins.
+    """
+    body_text = _extract_upload_text(file) or (body or "").strip()
+    parsed = parse_gmail_export(body_text)
+    db.add(models.EmailThread(
+        person_id=person_id,
+        application_id=int(application_id) if application_id else None,
+        subject=(subject or "").strip() or parsed["subject"],
+        body=body_text or None,
+        participants=(participants or "").strip() or parsed["participants"],
+        started_at=_parse_dt(started_at) or parsed["started_at"],
+        last_message_at=_parse_dt(last_message_at) or parsed["last_message_at"],
+        notes=notes or None,
+    ))
+    db.commit()
+    return RedirectResponse(url="/email-threads", status_code=303)
+
+
+@router.get("/email-threads/{thread_id}/edit")
+def edit_email_thread_page(thread_id: int, request: Request, db: Session = Depends(get_db)):
+    thread = _get_or_404(db, models.EmailThread, thread_id)
+    return templates.TemplateResponse(request, "email_thread_edit.html", {
+        "active": "emails",
+        "thread": thread,
+        "people": db.query(models.Person).order_by(models.Person.name).all(),
+        "applications": db.query(models.JobApplication).all(),
+    })
+
+
+@router.post("/ui/email-threads/{thread_id}/edit")
+def update_email_thread_ui(
+    thread_id: int,
+    person_id: int = Form(...),
+    application_id: Optional[str] = Form(None),
+    subject: str = Form(""),
+    body: str = Form(""),
+    participants: str = Form(""),
+    started_at: str = Form(""),
+    last_message_at: str = Form(""),
+    notes: str = Form(""),
+    file: UploadFile = File(None),
+    db: Session = Depends(get_db),
+):
+    """Update an email thread. Uploading a file re-extracts and replaces the
+    body; otherwise the pasted-text box (pre-filled with the current body) is
+    the source of truth, so extraction glitches can be hand-fixed without
+    re-uploading — same pattern as editing a Resume. As on create, a
+    Gmail-shaped body only fills in fields left blank; it never overwrites
+    something already typed in the form.
+    """
+    thread = _get_or_404(db, models.EmailThread, thread_id)
+    extracted = _extract_upload_text(file)
+    body_text = extracted or (body or "").strip()
+    parsed = parse_gmail_export(body_text) if extracted else {"subject": None, "participants": None, "started_at": None, "last_message_at": None}
+    thread.person_id = person_id
+    thread.application_id = int(application_id) if application_id else None
+    thread.subject = (subject or "").strip() or parsed["subject"]
+    thread.body = body_text or None
+    thread.participants = (participants or "").strip() or parsed["participants"]
+    thread.started_at = _parse_dt(started_at) or parsed["started_at"]
+    thread.last_message_at = _parse_dt(last_message_at) or parsed["last_message_at"]
+    thread.notes = notes or None
+    db.commit()
+    return RedirectResponse(url="/email-threads", status_code=303)
+
+
+@router.post("/ui/email-threads/{thread_id}/delete")
+def delete_email_thread_ui(thread_id: int, db: Session = Depends(get_db)):
+    thread = _get_or_404(db, models.EmailThread, thread_id)
+    db.delete(thread)
+    db.commit()
+    return RedirectResponse(url="/email-threads", status_code=303)

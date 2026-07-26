@@ -52,6 +52,13 @@ CREATE TABLE people (
     application_id INTEGER REFERENCES job_applications(id) ON DELETE SET NULL,
     name TEXT NOT NULL
 );
+
+CREATE TABLE email_threads (
+    id INTEGER PRIMARY KEY,
+    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    application_id INTEGER REFERENCES job_applications(id) ON DELETE SET NULL,
+    subject TEXT
+);
 """
 
 
@@ -68,7 +75,8 @@ def _count(conn, table):
 
 def _seed(conn):
     """Employer company (1), agency company (2), resume, posting, application,
-    a recruiter at the agency tied to the application, and a stage-history row."""
+    a recruiter at the agency tied to the application, a stage-history row,
+    and an email thread with that recruiter about that application."""
     conn.execute("INSERT INTO companies(id, name) VALUES (1, 'Hiring Co')")
     conn.execute("INSERT INTO companies(id, name) VALUES (2, 'Staffing Agency')")
     conn.execute("INSERT INTO resumes(id, label) VALUES (1, 'RevOps v3')")
@@ -81,6 +89,10 @@ def _seed(conn):
     # Recruiter's OWN company is the agency (2), independent of the app's company (1).
     conn.execute(
         "INSERT INTO people(id, company_id, application_id, name) VALUES (1, 2, 1, 'Rec Ruiter')"
+    )
+    conn.execute(
+        "INSERT INTO email_threads(id, person_id, application_id, subject)"
+        " VALUES (1, 1, 1, 'Great catching up today!')"
     )
     conn.commit()
 
@@ -100,6 +112,11 @@ def test_deleting_company_cascades_to_its_details():
     assert _count(conn, "people") == 1, "agency recruiter should remain"
     row = conn.execute("SELECT application_id FROM people WHERE id = 1").fetchone()
     assert row[0] is None, "recruiter's application lookup should be SET NULL"
+    # The email thread survives too (its master is the person, not the
+    # application) -- only its application lookup is nulled.
+    assert _count(conn, "email_threads") == 1, "email thread should survive (master is Person)"
+    row = conn.execute("SELECT application_id FROM email_threads WHERE id = 1").fetchone()
+    assert row[0] is None, "thread's application lookup should be SET NULL"
 
 
 def test_deleting_posting_nulls_application_but_keeps_it():
@@ -131,6 +148,39 @@ def test_deleting_application_cascades_history_and_nulls_people():
     assert _count(conn, "people") == 1, "person should survive"
     row = conn.execute("SELECT application_id FROM people WHERE id = 1").fetchone()
     assert row[0] is None, "person.application_id should be SET NULL"
+    assert _count(conn, "email_threads") == 1, "email thread should survive"
+    row = conn.execute("SELECT application_id FROM email_threads WHERE id = 1").fetchone()
+    assert row[0] is None, "thread.application_id should be SET NULL"
+
+
+def test_deleting_person_cascades_email_threads():
+    conn = _fresh_db()
+    _seed(conn)
+    conn.execute("DELETE FROM people WHERE id = 1")
+    conn.commit()
+    assert _count(conn, "email_threads") == 0, "email thread should cascade with its person"
+    assert _count(conn, "job_applications") == 1, "application should be unaffected"
+
+
+def test_multiple_email_threads_can_share_one_application():
+    """application_id on email_threads is a plain indexed lookup, not unique
+    -- a recruiter thread and a separate hiring-manager thread should both be
+    able to point at the same application at once."""
+    conn = _fresh_db()
+    _seed(conn)
+    conn.execute("INSERT INTO companies(id, name) VALUES (3, 'Hiring Co')")
+    conn.execute(
+        "INSERT INTO people(id, company_id, application_id, name) VALUES (2, 3, 1, 'Hiring Manager')"
+    )
+    conn.execute(
+        "INSERT INTO email_threads(id, person_id, application_id, subject)"
+        " VALUES (2, 2, 1, 'Thread w/ hiring manager')"
+    )
+    conn.commit()
+    rows = conn.execute(
+        "SELECT id FROM email_threads WHERE application_id = 1 ORDER BY id"
+    ).fetchall()
+    assert rows == [(1,), (2,)], "both threads should be attached to the same application"
 
 
 if __name__ == "__main__":

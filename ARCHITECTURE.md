@@ -15,6 +15,7 @@ analogy.
 | **Person**        | Contact                    | A recruiter, hiring manager, interviewer, or referral.              |
 | **Stage History** | OpportunityFieldHistory    | An append-only log of stage changes, so the funnel is measurable.   |
 | **Resume**        | (a versioned asset)        | Which resume version was attached to an application.                |
+| **Email Thread**  | Email/Task on a Contact    | A recruiter or hiring-manager email exchange.                       |
 
 The Posting → Product mapping is the one that isn't obvious. It's the right fit
 because a posting, like a product in a catalog, has its own lifecycle
@@ -36,7 +37,11 @@ Job Application
  └── (master-detail) <── Stage History    (one row per stage change)
 
 Person
- └── (lookup, nullable) ──> Job Application (the application this person is tied to)
+ ├── (lookup, nullable) ──> Job Application (the application this person is tied to)
+ └── (master-detail) ──> Email Thread       (conversations with this person)
+
+Email Thread
+ └── (lookup, nullable) ──> Job Application (unset until the thread is about a role)
 ```
 
 ### Master-detail vs. lookup — what it means here
@@ -180,6 +185,82 @@ than reset, and now-redundant history rows (e.g. a logged Recruiter Screen →
 Hiring Manager Screen move, which collapses into a Discovery → Discovery
 no-op once both fold into one stage) are cleaned up rather than left as
 misleading duplicate entries.
+
+## Meetings and Email Threads
+
+Both are activity records, but deliberately **separate objects**, not one
+merged "Interaction" table:
+
+- **Meeting** — master-detail to Job Application. A meeting exists because
+  you're pursuing a specific role; through the application it also reaches
+  the Posting (JD) and Resume, which is what makes "questions asked, by JD /
+  by resume" analysis possible. Shape: a single dated event (`meeting_date`)
+  with a summary and transcript.
+- **Email Thread** — master-detail to **Person**, with only an optional
+  lookup to Job Application. A thread is fundamentally a conversation with
+  someone, and — like a Person's own company — that conversation can predate
+  any application: a cold recruiter email lands in your inbox before you've
+  decided to pursue anything. Forcing every thread to have an application
+  would make cold outreach impossible to log until after the fact. Shape:
+  a subject, a body, and a message span (`started_at` → `last_message_at`),
+  not a single instant.
+
+Different masters, different required fields, different natural lifetimes —
+merging them would mean either making Application nullable on both (losing
+the not-null guarantee Meeting relies on) or forcing every early-stage email
+to fabricate an application it doesn't have yet. Two objects, cleanly typed,
+avoids both.
+
+### Ingestion: why manual paste/upload, not a live Gmail sync
+
+Three ways to get email threads in were considered: paste the text by hand,
+have an assistant pull threads on demand via an MCP-connected Gmail session
+and push them in, or build a full Gmail OAuth2 integration into the app
+itself (the "GRANOLA_API_KEY pattern" — the app polls on its own).
+
+We started with the first, for a reason worth stating plainly: an MCP Gmail
+connector grants whatever session it's attached to broad read access to the
+*whole* inbox, not just job-search threads — that's a real access decision,
+independent of how the app itself is built, and shouldn't be an incidental
+side effect of picking the easy ingestion path. A live OAuth2 integration
+would actually be *more* scoped in principle (read-only, filterable by
+label/sender) — but is meaningfully heavier to build and isn't justified
+until the manual flow proves the data model earns its keep. So v1 optimizes
+for the cheapest, most self-contained path: paste text directly, or **upload
+a file** — a PDF export of the thread works well and is extracted with the
+same `pypdf`/`python-docx` pipeline Resume upload already uses (see
+`app/services/resume_extract.py`). No external credential, no chat-session
+dependency, same trust boundary as uploading a resume.
+
+### Auto-parsing a Gmail export
+
+Gmail's own "Print all" export (the printer icon on an open thread) has a
+very regular, machine-readable shape: every message header reads
+`<Sender> <email> <Weekday>, <Month> <Day>, <Year> at <H:MM> <AM/PM>`, and
+the subject sits on its own line right before the first one. That's regular
+enough to lift structured fields out of unstructured text —
+`app/services/email_parse.py` parses subject, participants (every email
+address found), and the thread's first/last message timestamps directly
+from the extracted text. Verified against a real Gmail export PDF, not
+guessed at (see `tests/test_email_parse.py`). Parsed values only ever fill
+in a field you left blank; anything typed by hand always wins, the same
+override principle used everywhere else auto-extraction touches a form
+(resume text, Granola-imported meeting fields).
+
+### One timeline, two objects
+
+An Application's edit page shows an **Activity** related list that merges
+its Meetings and Email Threads into one chronologically-sorted view, rather
+than two separate lists you'd have to mentally interleave. This is a
+display-layer merge only — no new table, no schema change: the route
+handler (`_activity_timeline()` in `app/routers/ui.py`) fetches both
+relationships, normalizes each row into a common `{type, when, title, sub,
+url}` shape, and sorts by whichever timestamp best represents "most recent
+activity" for that row type (`meeting_date` for a Meeting, `last_message_at`
+for a thread, so a thread with a fresh reply surfaces near the top rather
+than staying pinned at when it started). Salesforce's own Activity Timeline
+works the same way under the hood — Tasks and Events are different objects
+with different fields, merged and sorted at the UI layer, not in the schema.
 
 ## Ingestion & dedup (roadmap)
 

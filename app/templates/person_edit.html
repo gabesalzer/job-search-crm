@@ -51,8 +51,32 @@
     </div>
   </form>
   <form method="post" action="/ui/people/{{ person.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
-        onsubmit="return confirm('Delete {{ person.name }}? This cannot be undone.');">
+        onsubmit="return confirm('Delete {{ person.name }}? This also deletes any email threads logged with them. This cannot be undone.');">
     <button type="submit" class="linkbtn danger">Delete this person</button>
   </form>
+</div>
+
+<div style="max-width:680px;margin-top:1.4rem">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem">
+    <h2 style="font-size:1rem;margin:0">Email threads <span style="color:var(--neutral);font-weight:400">({{ person.email_threads|length }})</span></h2>
+    <a href="/email-threads?person_id={{ person.id }}" class="btn secondary" style="font-size:0.8rem;padding:0.35rem 0.7rem">+ Log an email thread</a>
+  </div>
+  {% if person.email_threads %}
+  <div class="panel" style="padding:0">
+    {% for t in person.email_threads %}
+    <div style="padding:0.7rem 1rem;{% if not loop.last %}border-bottom:1px solid var(--line){% endif %}">
+      <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+        <a href="/email-threads/{{ t.id }}/edit"><strong>{{ t.subject or "Untitled thread" }}</strong></a>
+        {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted);white-space:nowrap">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
+      </div>
+      {% if t.application %}
+      <div style="font-size:0.75rem;color:var(--neutral);margin-top:0.25rem">Re: <a href="/applications/{{ t.application.id }}/edit">{{ t.application.title or "Untitled" }}</a></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No email threads logged with {{ person.name }} yet.</p>
+  {% endif %}
 </div>
 {% endblock %}

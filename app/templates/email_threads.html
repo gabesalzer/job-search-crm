@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Email threads · Job Search CRM{% endblock %}
+{% block body %}
+<h1>Email threads</h1>
+<p class="subtitle">Recruiter and hiring-manager email exchanges. Paste the thread text in, or upload a file — a PDF print/export of the thread works well and gets its text pulled out automatically, same as a resume upload.</p>
+
+<details class="newform" {% if not threads or preselect_person_id %}open{% endif %}>
+  <summary>New email thread</summary>
+
+  {% if people %}
+  <form method="post" action="/ui/email-threads" enctype="multipart/form-data">
+    <div class="form-grid">
+      <div class="field">
+        <label>Person</label>
+        <select name="person_id" required>
+          {% for p in people %}
+          <option value="{{ p.id }}" {% if preselect_person_id==p.id %}selected{% endif %}>{{ p.name }} — {{ p.company.name if p.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Application (optional)</label>
+        <select name="application_id">
+          <option value="">— none —</option>
+          {% for a in applications %}
+          <option value="{{ a.id }}" {% if preselect_application_id==a.id %}selected{% endif %}>{{ a.title or "Untitled" }} — {{ a.company.name if a.company else "?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field"><label>Subject</label><input name="subject" placeholder="Re: RevOps Manager role"></div>
+      <div class="field"><label>Participants</label><input name="participants" placeholder="jane@co.com, me@gmail.com"></div>
+      <div class="field"><label>Thread started</label><input name="started_at" type="datetime-local"></div>
+      <div class="field"><label>Most recent message</label><input name="last_message_at" type="datetime-local"></div>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Upload thread (PDF / DOCX / TXT — optional, extracts text automatically)</label>
+      <input name="file" type="file" accept=".pdf,.docx,.txt,.md">
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>Or paste thread text</label><textarea name="body" rows="6" placeholder="Paste the email thread here if you're not uploading a file"></textarea></div>
+    <div class="field" style="margin-top:0.5rem"><label>Your notes (optional)</label><input name="notes"></div>
+    <div style="margin-top:0.6rem"><button class="btn" type="submit">Add email thread</button></div>
+  </form>
+  {% else %}
+  <p class="empty">Add a person first on the <a href="/people">People</a> tab — an email thread is tied to whoever you're emailing with.</p>
+  {% endif %}
+</details>
+
+{% if threads %}
+<div class="grid">
+  {% for t in threads %}
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
+      <strong>{{ t.subject or "Untitled thread" }}</strong>
+      {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted);white-space:nowrap">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
+    </div>
+    <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
+      {{ t.person.name if t.person else "—" }}
+      {% if t.application %} · <a href="/applications/{{ t.application.id }}/edit">{{ t.application.title or "Untitled" }}</a>{% endif %}
+    </div>
+    {% if t.body %}
+    <div style="font-size:0.8rem;color:var(--muted);margin-top:0.45rem;white-space:pre-wrap;max-height:5.5em;overflow:hidden">{{ t.body[:280] }}{% if t.body|length > 280 %}…{% endif %}</div>
+    {% endif %}
+    <div class="row-actions">
+      <a href="/email-threads/{{ t.id }}/edit">Edit</a>
+      <form method="post" action="/ui/email-threads/{{ t.id }}/delete" class="inline-form"
+            onsubmit="return confirm('Delete this email thread ({{ t.subject or 'Untitled' }})? This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty">No email threads yet — add one above.</p>
+{% endif %}
+{% endblock %}
