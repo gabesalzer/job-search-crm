@@ -17,7 +17,8 @@
     <div class="form-grid">
       <div class="field">
         <label>Person</label>
-        <select name="person_id" required>
+        <select name="person_id">
+          <option value="">— auto-detect from a re-uploaded thread (creates if new) —</option>
           {% for p in people %}
           <option value="{{ p.id }}" {% if thread.person_id==p.id %}selected{% endif %}>{{ p.name }} — {{ p.company.name if p.company else "?" }}</option>
           {% endfor %}

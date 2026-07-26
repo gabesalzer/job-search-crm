@@ -247,6 +247,50 @@ in a field you left blank; anything typed by hand always wins, the same
 override principle used everywhere else auto-extraction touches a form
 (resume text, Granola-imported meeting fields).
 
+### Auto-creating People from a thread's senders
+
+`EmailThread.person_id` is required — a thread is always *with* someone —
+but you don't have to create that Person by hand first. The parser also
+extracts every real message **sender** (not just any email mentioned in the
+text) from the Gmail-shaped headers, and identifies which one is *you* from
+the account-owner banner line Gmail always prints at the top of an export.
+Whatever's left — the other side of the conversation — gets found-or-created
+as a Person automatically.
+
+**Email address is the dedup key**, compared case-insensitively: the same
+address always resolves to the same Person, whether it shows up in this
+thread, a later one, or one you upload for a completely different
+application. An existing match is returned as-is and never overwritten, so a
+later, blanker upload can't clobber a name, role, or notes you've since
+filled in by hand.
+
+When a brand-new email needs a brand-new Person, it also needs a Company
+(Person's own company is `NOT NULL`) — inferred from the email's domain.
+That lookup checks existing companies by their **website's domain** first
+(so a second person at an already-known company, e.g. a hiring manager at a
+company you already have a recruiter contact for, reuses that company
+instead of creating a duplicate), and only creates a new one, named from a
+rough cleanup of the domain (`condor-software.com` → "Condor Software"), if
+nothing matches. That guess is a starting point, not a final answer — like
+every other auto-created record in this app, it's fully editable afterward.
+An auto-created Person's role defaults to `Other` for the same reason: better
+an honest unknown than a wrong guess at Recruiter vs. Hiring Manager vs.
+Interviewer.
+
+If a thread has more than one non-you sender (e.g. a recruiter loops in a
+hiring manager mid-thread), every one of them gets found-or-created as a
+Person — useful on its own, since your People list fills in as a side
+effect of just logging threads — but the thread's own `person_id` only ever
+points at the *first* sender, in message order, since the schema is one
+thread → one person. An explicit pick in the Person dropdown always
+overrides auto-detection, same override rule as every other auto-filled
+field on this form. If the text isn't Gmail-shaped and you didn't pick a
+Person by hand, thread creation fails with a clear error rather than
+guessing — see `_resolve_thread_person()` in `app/routers/ui.py`. This whole
+path is proven against representative cases (case-insensitive matching, a
+brand-new email, a second person at a known company, two threads landing on
+two different companies) in `tests/test_person_from_email.py`.
+
 ### One timeline, two objects
 
 An Application's edit page shows an **Activity** related list that merges

@@ -56,10 +56,27 @@ def test_participants_include_both_sides_deduped():
     assert sorted(emails) == ["deirdre.mullen@condorsoftware.com", "gbsalzer@gmail.com"]
 
 
+def test_self_email_is_the_account_banner_not_hardcoded():
+    """self_email is read off whatever account exported the thread -- not a
+    hardcoded address -- so this works for anyone's inbox, not just one."""
+    result = parse_gmail_export(GMAIL_EXPORT_TEXT)
+    assert result["self_email"] == "gbsalzer@gmail.com"
+
+
+def test_other_senders_excludes_self_and_dedupes_repeat_replies():
+    """Gabe sends 2 of the 3 messages; Deirdre sends 1. other_senders should
+    contain Deirdre exactly once, not Gabe, and not Deirdre twice."""
+    result = parse_gmail_export(GMAIL_EXPORT_TEXT)
+    assert result["other_senders"] == [
+        {"name": "Deirdre Mullen", "email": "deirdre.mullen@condorsoftware.com"}
+    ]
+
+
 def test_empty_text_returns_all_none():
     result = parse_gmail_export("")
     assert result == {
         "subject": None, "participants": None, "started_at": None, "last_message_at": None,
+        "self_email": None, "other_senders": [],
     }
 
 
@@ -71,6 +88,45 @@ def test_non_gmail_text_returns_all_none_rather_than_guessing():
     assert result["subject"] is None
     assert result["started_at"] is None
     assert result["last_message_at"] is None
+
+
+def test_other_senders_lists_multiple_distinct_people_in_first_seen_order():
+    text = (
+        "Gabe Salzer <gbsalzer@gmail.com>\n"
+        "Intro to Alexey\n"
+        "3 messages\n"
+        "Deirdre Mullen <deirdre.mullen@condorsoftware.com> Wed, Jul 22, 2026 at 8:35 PM\n"
+        "To: Gabe Salzer <gbsalzer@gmail.com>\n"
+        "Looping in Alexey.\n"
+        "Alexey Ivanov <alexey@condorsoftware.com> Thu, Jul 23, 2026 at 10:00 AM\n"
+        "To: Gabe Salzer <gbsalzer@gmail.com>\n"
+        "Great to e-meet you.\n"
+        "Gabe Salzer <gbsalzer@gmail.com> Fri, Jul 24, 2026 at 8:21 PM\n"
+        "To: Alexey Ivanov <alexey@condorsoftware.com>\n"
+        "Thanks!\n"
+    )
+    result = parse_gmail_export(text)
+    assert result["other_senders"] == [
+        {"name": "Deirdre Mullen", "email": "deirdre.mullen@condorsoftware.com"},
+        {"name": "Alexey Ivanov", "email": "alexey@condorsoftware.com"},
+    ]
+
+
+def test_no_banner_line_means_no_self_email_and_nobody_excluded():
+    """If the text doesn't start with the account-owner banner (e.g. someone
+    pasted just the message bodies, not a full Gmail export), self_email
+    stays None and every sender shows up in other_senders -- safer than
+    guessing wrong about which address is "you"."""
+    text = (
+        "Deirdre Mullen <deirdre.mullen@condorsoftware.com> Wed, Jul 22, 2026 at 8:35 PM\n"
+        "To: Gabe Salzer <gbsalzer@gmail.com>\n"
+        "Hi Gabe,\n"
+    )
+    result = parse_gmail_export(text)
+    assert result["self_email"] is None
+    assert result["other_senders"] == [
+        {"name": "Deirdre Mullen", "email": "deirdre.mullen@condorsoftware.com"}
+    ]
 
 
 def test_single_message_thread_has_no_message_count_line():

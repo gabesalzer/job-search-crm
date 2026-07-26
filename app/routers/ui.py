@@ -269,6 +269,74 @@ def _find_or_create_company(
     return company
 
 
+def _domain_of(email: str) -> Optional[str]:
+    email = (email or "").strip().lower()
+    return email.split("@", 1)[1] if "@" in email else None
+
+
+def _company_name_from_domain(domain: str) -> str:
+    """Turn "condorsoftware.com" into "Condorsoftware" -- a rough guess, not
+    a real company-name lookup service. Good enough as a starting point; the
+    Company is fully editable afterward like any auto-created record here."""
+    label = domain.split(".")[0]
+    return re.sub(r"[-_]+", " ", label).strip().title() or domain
+
+
+def _find_or_create_company_by_domain(email: str, db: Session) -> models.Company:
+    """Find a company whose website matches this email's domain, or create
+    one. Checked by domain (not name) because that's the only signal an email
+    address gives us -- and it's also how a person's auto-created company
+    should be found again if a second person at the same company emails you
+    later. Existing companies win over creating a duplicate.
+    """
+    domain = _domain_of(email)
+    if domain:
+        for company in db.query(models.Company).filter(models.Company.website.isnot(None)):
+            host = urlparse(
+                company.website if re.match(r"^https?://", company.website, re.I)
+                else "https://" + company.website
+            ).netloc.lower().split(":")[0]
+            if host.startswith("www."):
+                host = host[4:]
+            if host == domain:
+                return company
+    name = _company_name_from_domain(domain) if domain else "Unknown company"
+    company = models.Company(
+        name=name,
+        company_type=models.CompanyType.EMPLOYER,
+        website=f"https://{domain}" if domain else None,
+    )
+    db.add(company)
+    db.flush()
+    return company
+
+
+def _find_or_create_person_by_email(
+    email: str, db: Session, name: Optional[str] = None, application_id: Optional[int] = None
+) -> models.Person:
+    """Look up a Person by email (case-insensitive), creating one if missing.
+    Email is the dedup key: the same address always resolves to the same
+    Person record, regardless of which thread or upload mentions it. Existing
+    people are returned as-is (never overwritten) so a later, blanker upload
+    can't clobber details you've already filled in by hand.
+    """
+    email = (email or "").strip().lower()
+    existing = db.query(models.Person).filter(models.Person.email.ilike(email)).first()
+    if existing:
+        return existing
+    company = _find_or_create_company_by_domain(email, db)
+    person = models.Person(
+        name=(name or "").strip() or email,
+        company_id=company.id,
+        application_id=application_id,
+        role=models.PersonRole.OTHER,
+        email=email,
+    )
+    db.add(person)
+    db.flush()
+    return person
+
+
 def _to_float(value: str):
     try:
         return float(value) if value not in (None, "") else None
@@ -772,9 +840,42 @@ def email_threads_page(
     })
 
 
+def _resolve_thread_person(
+    person_id_form: Optional[str],
+    parsed: dict,
+    db: Session,
+    application_id: Optional[int],
+) -> int:
+    """Resolve which Person an email thread belongs to. An explicit choice in
+    the form always wins. Otherwise, every real sender found in a Gmail-shaped
+    upload/paste gets found-or-created by email (dedup key: lowercased email
+    address) -- so cc'd/other repliers become known People too, not just the
+    one the thread attaches to. The thread itself attaches to the first
+    sender found, in message order (usually whoever is driving the thread).
+    """
+    if person_id_form:
+        return int(person_id_form)
+    other_senders = parsed.get("other_senders") or []
+    if not other_senders:
+        raise HTTPException(
+            400,
+            "Couldn't detect who this thread is with, so a Person is required. "
+            "Either pick one from the dropdown, or upload/paste a Gmail-exported "
+            "thread (Gmail's \"Print all\") so it can be detected automatically.",
+        )
+    primary = None
+    for sender in other_senders:
+        person = _find_or_create_person_by_email(
+            sender["email"], db, name=sender["name"], application_id=application_id
+        )
+        if primary is None:
+            primary = person
+    return primary.id
+
+
 @router.post("/ui/email-threads")
 def create_email_thread_ui(
-    person_id: int = Form(...),
+    person_id: Optional[str] = Form(None),
     application_id: Optional[str] = Form(None),
     subject: str = Form(""),
     body: str = Form(""),
@@ -792,13 +893,17 @@ def create_email_thread_ui(
 
     If the text looks like a Gmail thread export, subject/participants/dates
     are auto-filled from it -- but only into fields you left blank, so
-    anything you typed by hand always wins.
+    anything you typed by hand already wins. Person works the same way: leave
+    it on "auto-detect" and it's found-or-created by email address; pick one
+    explicitly and that always overrides detection.
     """
     body_text = _extract_upload_text(file) or (body or "").strip()
     parsed = parse_gmail_export(body_text)
+    app_id = int(application_id) if application_id else None
+    resolved_person_id = _resolve_thread_person(person_id, parsed, db, app_id)
     db.add(models.EmailThread(
-        person_id=person_id,
-        application_id=int(application_id) if application_id else None,
+        person_id=resolved_person_id,
+        application_id=app_id,
         subject=(subject or "").strip() or parsed["subject"],
         body=body_text or None,
         participants=(participants or "").strip() or parsed["participants"],
@@ -824,7 +929,7 @@ def edit_email_thread_page(thread_id: int, request: Request, db: Session = Depen
 @router.post("/ui/email-threads/{thread_id}/edit")
 def update_email_thread_ui(
     thread_id: int,
-    person_id: int = Form(...),
+    person_id: Optional[str] = Form(None),
     application_id: Optional[str] = Form(None),
     subject: str = Form(""),
     body: str = Form(""),
@@ -840,14 +945,21 @@ def update_email_thread_ui(
     the source of truth, so extraction glitches can be hand-fixed without
     re-uploading — same pattern as editing a Resume. As on create, a
     Gmail-shaped body only fills in fields left blank; it never overwrites
-    something already typed in the form.
+    something already typed in the form -- and Person auto-detection only
+    runs off a freshly uploaded file, never off the already-saved body, so
+    just re-saving the form can't unexpectedly reassign the thread to someone
+    else or spawn a duplicate Person.
     """
     thread = _get_or_404(db, models.EmailThread, thread_id)
     extracted = _extract_upload_text(file)
     body_text = extracted or (body or "").strip()
-    parsed = parse_gmail_export(body_text) if extracted else {"subject": None, "participants": None, "started_at": None, "last_message_at": None}
-    thread.person_id = person_id
-    thread.application_id = int(application_id) if application_id else None
+    parsed = parse_gmail_export(body_text) if extracted else {
+        "subject": None, "participants": None, "started_at": None, "last_message_at": None,
+        "other_senders": [],
+    }
+    app_id = int(application_id) if application_id else None
+    thread.person_id = _resolve_thread_person(person_id, parsed, db, app_id)
+    thread.application_id = app_id
     thread.subject = (subject or "").strip() or parsed["subject"]
     thread.body = body_text or None
     thread.participants = (participants or "").strip() or parsed["participants"]

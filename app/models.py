@@ -294,7 +294,12 @@ class Person(Base):
 
     name = Column(String(255), nullable=False)
     role = Column(Enum(PersonRole), default=PersonRole.RECRUITER)
-    email = Column(String(255))
+    # The dedup key for auto-creating People from an email thread's sender
+    # (see _find_or_create_person_by_email in app/routers/ui.py) -- looked up
+    # case-insensitively, never enforced unique at the DB level (SQLite
+    # ALTER TABLE can't add a unique constraint after the fact, and this app
+    # has no migration framework), so it's an application-level guarantee.
+    email = Column(String(255), index=True)
     phone = Column(String(64))
     linkedin = Column(String(512))
     is_champion = Column(Integer, default=0)  # simple 0/1 flag for now

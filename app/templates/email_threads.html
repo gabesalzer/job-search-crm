@@ -2,17 +2,17 @@
 {% block title %}Email threads · Job Search CRM{% endblock %}
 {% block body %}
 <h1>Email threads</h1>
-<p class="subtitle">Recruiter and hiring-manager email exchanges. Paste the thread text in, or upload a file — a PDF print/export of the thread works well and gets its text pulled out automatically, same as a resume upload.</p>
+<p class="subtitle">Recruiter and hiring-manager email exchanges. Paste the thread text in, or upload a file — a PDF print/export of the thread works well and gets its text pulled out automatically, same as a resume upload. Upload a Gmail "Print all" export and the Person is detected and created for you automatically, matched by email address.</p>
 
 <details class="newform" {% if not threads or preselect_person_id %}open{% endif %}>
   <summary>New email thread</summary>
 
-  {% if people %}
   <form method="post" action="/ui/email-threads" enctype="multipart/form-data">
     <div class="form-grid">
       <div class="field">
         <label>Person</label>
-        <select name="person_id" required>
+        <select name="person_id">
+          <option value="">— auto-detect from thread (creates if new) —</option>
           {% for p in people %}
           <option value="{{ p.id }}" {% if preselect_person_id==p.id %}selected{% endif %}>{{ p.name }} — {{ p.company.name if p.company else "?" }}</option>
           {% endfor %}
@@ -40,9 +40,6 @@
     <div class="field" style="margin-top:0.5rem"><label>Your notes (optional)</label><input name="notes"></div>
     <div style="margin-top:0.6rem"><button class="btn" type="submit">Add email thread</button></div>
   </form>
-  {% else %}
-  <p class="empty">Add a person first on the <a href="/people">People</a> tab — an email thread is tied to whoever you're emailing with.</p>
-  {% endif %}
 </details>
 
 {% if threads %}

@@ -90,7 +90,12 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   its text is extracted the same way a resume upload is, and if it's
   shaped like a Gmail export, the subject, participants, and thread
   start/last-message dates are pulled out and pre-filled automatically
-  (anything you type by hand always wins over the auto-filled value). An
+  (anything you type by hand always wins over the auto-filled value). You
+  don't need to create the Person first, either — leave it on "auto-detect"
+  and the other side of the conversation is found-or-created by email
+  address (the dedup key: the same address always resolves to the same
+  Person, and an auto-created one also gets a Company inferred from their
+  email domain, reusing an existing company if one already matches). An
   application's edit page shows an **Activity** related list that merges its
   meetings and email threads into one chronological timeline.
 - **Editing**: every record type (companies, postings, resumes, applications,
