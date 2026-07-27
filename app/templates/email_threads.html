@@ -2,22 +2,13 @@
 {% block title %}Email threads · Job Search CRM{% endblock %}
 {% block body %}
 <h1>Email threads</h1>
-<p class="subtitle">Recruiter and hiring-manager email exchanges. Paste the thread text in, or upload a file — a PDF print/export of the thread works well and gets its text pulled out automatically, same as a resume upload. Upload a Gmail "Print all" export and the Person is detected and created for you automatically, matched by email address.</p>
+<p class="subtitle">Recruiter and hiring-manager email exchanges. Paste the thread text in, or upload a file — a PDF print/export of the thread works well and gets its text pulled out automatically, same as a resume upload. Upload a Gmail "Print all" export and everyone who sent a message is detected and linked automatically, created if new, matched by email address.</p>
 
 <details class="newform" {% if not threads or preselect_person_id %}open{% endif %}>
   <summary>New email thread</summary>
 
   <form method="post" action="/ui/email-threads" enctype="multipart/form-data">
     <div class="form-grid">
-      <div class="field">
-        <label>Person</label>
-        <select name="person_id">
-          <option value="">— auto-detect from thread (creates if new) —</option>
-          {% for p in people %}
-          <option value="{{ p.id }}" {% if preselect_person_id==p.id %}selected{% endif %}>{{ p.name }} — {{ p.company.name if p.company else "?" }}</option>
-          {% endfor %}
-        </select>
-      </div>
       <div class="field">
         <label>Application (optional)</label>
         <select name="application_id">
@@ -27,11 +18,24 @@
           {% endfor %}
         </select>
       </div>
-      <div class="field"><label>Subject</label><input name="subject" placeholder="Re: RevOps Manager role"></div>
-      <div class="field"><label>Participants</label><input name="participants" placeholder="jane@co.com, me@gmail.com"></div>
+      <div class="field"><label>Subject</label><input name="subject" placeholder="Re: the role we discussed"></div>
       <div class="field"><label>Thread started</label><input name="started_at" type="datetime-local"></div>
       <div class="field"><label>Most recent message</label><input name="last_message_at" type="datetime-local"></div>
     </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>People on this thread</label>
+      <div style="max-height:150px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:0.5rem 0.7rem;background:#fff">
+        {% for p in people %}
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;font-weight:400;color:var(--ink);margin:0.15rem 0">
+          <input type="checkbox" name="person_ids" value="{{ p.id }}" style="width:auto" {% if p.id==preselect_person_id %}checked{% endif %}>
+          {{ p.name }} — {{ p.company.name if p.company else "?" }}
+        </label>
+        {% endfor %}
+        {% if not people %}<p class="empty" style="padding:0.2rem 0">No people yet — leave unchecked and they'll be created from the upload.</p>{% endif %}
+      </div>
+      <p style="font-size:0.72rem;color:var(--neutral);margin:0.3rem 0 0">Leave everyone unchecked to auto-detect from the upload (created if new, matched by email).</p>
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>Participants (free text, optional)</label><input name="participants" placeholder="jane@co.com, me@gmail.com"></div>
     <div class="field" style="margin-top:0.5rem">
       <label>Upload thread (PDF / DOCX / TXT — optional, extracts text automatically)</label>
       <input name="file" type="file" accept=".pdf,.docx,.txt,.md">
@@ -51,7 +55,7 @@
       {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted);white-space:nowrap">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
     </div>
     <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
-      {{ t.person.name if t.person else "—" }}
+      {{ t.people|map(attribute='name')|join(', ') if t.people else "no one linked" }}
       {% if t.application %} · <a href="/applications/{{ t.application.id }}/edit">{{ t.application.title or "Untitled" }}</a>{% endif %}
     </div>
     {% if t.body %}

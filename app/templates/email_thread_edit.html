@@ -16,15 +16,6 @@
   <form method="post" action="/ui/email-threads/{{ thread.id }}/edit" enctype="multipart/form-data">
     <div class="form-grid">
       <div class="field">
-        <label>Person</label>
-        <select name="person_id">
-          <option value="">— auto-detect from a re-uploaded thread (creates if new) —</option>
-          {% for p in people %}
-          <option value="{{ p.id }}" {% if thread.person_id==p.id %}selected{% endif %}>{{ p.name }} — {{ p.company.name if p.company else "?" }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
         <label>Application (optional)</label>
         <select name="application_id">
           <option value="">— none —</option>
@@ -34,7 +25,6 @@
         </select>
       </div>
       <div class="field"><label>Subject</label><input name="subject" value="{{ thread.subject or '' }}"></div>
-      <div class="field"><label>Participants</label><input name="participants" value="{{ thread.participants or '' }}" placeholder="jane@co.com, me@gmail.com"></div>
       <div class="field">
         <label>Thread started</label>
         <input name="started_at" type="datetime-local" value="{{ thread.started_at.strftime('%Y-%m-%dT%H:%M') if thread.started_at else '' }}">
@@ -44,6 +34,21 @@
         <input name="last_message_at" type="datetime-local" value="{{ thread.last_message_at.strftime('%Y-%m-%dT%H:%M') if thread.last_message_at else '' }}">
       </div>
     </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>People on this thread</label>
+      <div style="max-height:150px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:0.5rem 0.7rem;background:#fff">
+        {% for p in people %}
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;font-weight:400;color:var(--ink);margin:0.15rem 0">
+          <input type="checkbox" name="person_ids" value="{{ p.id }}" style="width:auto" {% if p.id in selected_person_ids %}checked{% endif %}>
+          {{ p.name }} — {{ p.company.name if p.company else "?" }}
+        </label>
+        {% endfor %}
+      </div>
+      <p style="font-size:0.72rem;color:var(--neutral);margin:0.3rem 0 0">
+        Unchecking everyone and re-uploading a thread re-detects people from it (created if new). Unchecking everyone <em>without</em> re-uploading just unlinks this thread from everyone.
+      </p>
+    </div>
+    <div class="field" style="margin-top:0.5rem"><label>Participants (free text, optional)</label><input name="participants" value="{{ thread.participants or '' }}" placeholder="jane@co.com, me@gmail.com"></div>
     <div class="field" style="margin-top:0.5rem">
       <label>Re-upload thread (PDF / DOCX / TXT — optional, replaces the body below)</label>
       <input name="file" type="file" accept=".pdf,.docx,.txt,.md">

@@ -36,12 +36,12 @@ posting = SimpleNamespace(
 )
 
 resume = SimpleNamespace(
-    id=3, label="RevOps v3", content="Experienced RevOps leader...", source_link=None,
+    id=3, label="Resume v3", content="Experienced operations leader...", source_link=None,
     filename="resume.pdf", notes="metrics-forward", applications=[],
 )
 
 app_obj = SimpleNamespace(
-    id=4, title="Sr. RevOps Manager", company_id=1, company=company, stage=enum("Applied"),
+    id=4, title="Sr. Operations Manager", company_id=1, company=company, stage=enum("Applied"),
     lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
     email_threads=[],
@@ -67,16 +67,17 @@ person = SimpleNamespace(
 )
 
 thread = SimpleNamespace(
-    id=7, subject="Re: Sr. RevOps Manager role", body="Hi Jane,\n\nThanks for reaching out...",
+    id=7, subject="Re: Sr. Operations Manager role", body="Hi Jane,\n\nThanks for reaching out...",
     participants="jane@plaid.com, me@gmail.com", started_at=datetime(2026, 6, 20, 9, 0),
     last_message_at=datetime(2026, 6, 22, 14, 30), notes="Follow up next week",
-    person_id=6, person=person, application_id=4, application=app_obj,
+    people=[person], application_id=4, application=app_obj,
 )
 person.email_threads = [thread]
 app_obj.email_threads = [thread]
 
 activity = [
-    {"type": "Email", "when": thread.last_message_at, "title": thread.subject, "sub": person.name, "url": f"/email-threads/{thread.id}/edit"},
+    {"type": "Email", "when": thread.last_message_at, "title": thread.subject,
+     "sub": ", ".join(p.name for p in thread.people), "url": f"/email-threads/{thread.id}/edit"},
     {"type": "Meeting", "when": meeting.meeting_date, "title": meeting.title, "sub": meeting.meeting_type.value, "url": f"/meetings/{meeting.id}/edit"},
 ]
 
@@ -125,12 +126,22 @@ cases = [
         "active": "emails", "threads": [thread], "people": [person], "applications": [app_obj],
         "preselect_person_id": None, "preselect_application_id": None,
     }),
+    ("email_threads.html (preselected person)", {
+        "active": "emails", "threads": [thread], "people": [person], "applications": [app_obj],
+        "preselect_person_id": person.id, "preselect_application_id": None,
+    }),
     ("email_threads.html (empty)", {
         "active": "emails", "threads": [], "people": [], "applications": [],
         "preselect_person_id": None, "preselect_application_id": None,
     }),
     ("email_thread_edit.html", {
         "active": "emails", "thread": thread, "people": [person], "applications": [app_obj],
+        "selected_person_ids": {person.id},
+    }),
+    ("email_thread_edit.html (no one linked)", {
+        "active": "emails",
+        "thread": SimpleNamespace(**{**thread.__dict__, "people": []}),
+        "people": [person], "applications": [app_obj], "selected_person_ids": set(),
     }),
 ]
 

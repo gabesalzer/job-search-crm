@@ -83,21 +83,23 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   application they're optionally tied to, so an agency recruiter's company
   is the agency, not the employer you're interviewing at. Mark someone a
   *Champion* to flag they're rooting for you.
-- **Emails**: recruiter/hiring-manager email threads, tied to a Person and
-  optionally to an Application (unset for pre-application outreach, e.g. a
-  cold recruiter message). Paste the thread text in, or upload a file — a
-  PDF export of the thread (Gmail's own "Print all") works especially well:
-  its text is extracted the same way a resume upload is, and if it's
-  shaped like a Gmail export, the subject, participants, and thread
-  start/last-message dates are pulled out and pre-filled automatically
-  (anything you type by hand always wins over the auto-filled value). You
-  don't need to create the Person first, either — leave it on "auto-detect"
-  and the other side of the conversation is found-or-created by email
-  address (the dedup key: the same address always resolves to the same
-  Person, and an auto-created one also gets a Company inferred from their
-  email domain, reusing an existing company if one already matches). An
-  application's edit page shows an **Activity** related list that merges its
-  meetings and email threads into one chronological timeline.
+- **Emails**: recruiter/hiring-manager email threads, tied to any number of
+  People (a thread with a recruiter and a looped-in hiring manager links
+  both) and optionally to an Application (unset for pre-application
+  outreach, e.g. a cold recruiter message). Paste the thread text in, or
+  upload a file — a PDF export of the thread (Gmail's own "Print all") works
+  especially well: its text is extracted the same way a resume upload is,
+  and if it's shaped like a Gmail export, the subject, participants, and
+  thread start/last-message dates are pulled out and pre-filled
+  automatically (anything you type by hand always wins over the auto-filled
+  value). You don't need to create the People first, either — leave the
+  checklist blank and everyone on the other side of the conversation is
+  found-or-created by email address (the dedup key: the same address always
+  resolves to the same Person, and an auto-created one also gets a Company
+  inferred from their email domain, reusing an existing company if one
+  already matches). An application's edit page shows an **Activity** related
+  list that merges its meetings and email threads into one chronological
+  timeline.
 - **Editing**: every record type (companies, postings, resumes, applications,
   meetings, people, email threads) has an *Edit* link that opens a form
   pre-filled with its current values — available both from each list/board
@@ -110,12 +112,14 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   confirm dialog, available from both the list view and the edit page.
   Deleting a company cascades to its postings, applications, and people;
   deleting an application cascades to its stage history and meetings (and
-  clears the link on any email thread pointed at it); deleting a person
-  cascades to their email threads. Deleting a posting, resume, or
-  application-link on a person/thread just unlinks it from anything that
-  referenced it (nothing else is deleted). Stage history has no delete of
-  its own — it's an audit trail, cleaned up only as a side effect of
-  deleting its parent application.
+  clears the link on any email thread pointed at it). Deleting a person just
+  unlinks them from any email threads they were on — the threads themselves
+  survive, even if that leaves one with no one linked (an orphaned thread is
+  a valid state you can clean up by hand, not something the app deletes for
+  you). Deleting a posting, resume, or application-link on a person/thread
+  just unlinks it from anything that referenced it (nothing else is
+  deleted). Stage history has no delete of its own — it's an audit trail,
+  cleaned up only as a side effect of deleting its parent application.
 
 ## Data & privacy
 
@@ -123,6 +127,15 @@ Your real job-search data lives only in `data/jobsearch.db`, which is
 **gitignored** — it never leaves your machine. The repo ships with the schema and
 code only, no personal data and no seed data. Your Firecrawl key lives in `.env`,
 also gitignored.
+
+If you deploy this (e.g. via `render.yaml`), it's reachable on the open
+internet by default, so the app password-gates itself: set `APP_PASSWORD` (and
+`APP_USERNAME`) as environment variables and every route requires HTTP Basic
+Auth before it'll serve a page. Locally, leave `APP_PASSWORD` unset and there's
+no login prompt, since only you can reach `localhost`. Basic Auth with one
+shared password is minimal protection — enough to keep a deployed personal
+tool off of casual/automated access, not a substitute for a real auth system
+if this ever needs to hold more than one person's data.
 
 ## Status
 

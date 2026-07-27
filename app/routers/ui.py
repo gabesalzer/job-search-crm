@@ -9,7 +9,7 @@ from __future__ import annotations
 import pathlib
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -113,7 +113,7 @@ def _activity_timeline(app_obj: models.JobApplication) -> list[dict]:
             "type": "Email",
             "when": t.last_message_at or t.started_at,
             "title": t.subject or "Untitled thread",
-            "sub": t.person.name if t.person else None,
+            "sub": ", ".join(p.name for p in t.people) or None,
             "url": f"/email-threads/{t.id}/edit",
         })
     rows.sort(key=lambda r: r["when"] or datetime.min, reverse=True)
@@ -810,16 +810,17 @@ def update_person_ui(
 @router.post("/ui/people/{person_id}/delete")
 def delete_person_ui(person_id: int, db: Session = Depends(get_db)):
     person = _get_or_404(db, models.Person, person_id)
-    db.delete(person)  # cascades to that person's email threads
+    db.delete(person)  # unlinks (doesn't delete) any email threads they're on
     db.commit()
     return RedirectResponse(url="/people", status_code=303)
 
 
 # --------------------------------------------------------------------------- #
 # Email Threads: recruiter/HM email exchanges, pasted in manually for now.
-# Master is Person (a thread is always a conversation with someone, and can
-# predate any application, e.g. cold outreach); Application is an optional
-# lookup set once the thread is actually about a role. See ARCHITECTURE.md.
+# Related to People through a many-to-many join table, not a single required
+# "owner" -- a thread can genuinely involve more than one person (an intro
+# thread, a BCC'd hiring manager). Application is an optional lookup set once
+# the thread is actually about a role. See ARCHITECTURE.md.
 # --------------------------------------------------------------------------- #
 @router.get("/email-threads")
 def email_threads_page(
@@ -840,42 +841,54 @@ def email_threads_page(
     })
 
 
-def _resolve_thread_person(
-    person_id_form: Optional[str],
+def _resolve_thread_people(
+    person_ids_form: List[str],
     parsed: dict,
     db: Session,
     application_id: Optional[int],
-) -> int:
-    """Resolve which Person an email thread belongs to. An explicit choice in
-    the form always wins. Otherwise, every real sender found in a Gmail-shaped
-    upload/paste gets found-or-created by email (dedup key: lowercased email
-    address) -- so cc'd/other repliers become known People too, not just the
-    one the thread attaches to. The thread itself attaches to the first
-    sender found, in message order (usually whoever is driving the thread).
+    required: bool = True,
+) -> List["models.Person"]:
+    """Resolve which People an email thread involves. An explicit selection
+    in the form always wins outright (auto-detection is skipped entirely) --
+    picking zero people on purpose is a valid, if unusual, choice, same as
+    every other "manual overrides auto-fill" rule in this app. Left empty,
+    every real sender found in a Gmail-shaped upload/paste gets
+    found-or-created by email (dedup key: lowercased email address) and
+    linked -- so cc'd/other repliers all end up attached to the thread, not
+    just whichever one happened to be found first.
+
+    ``required`` distinguishes create from edit: a brand-new thread about
+    nobody doesn't make sense, so create fails loudly if nothing could be
+    resolved either way. An existing thread ending up with zero people
+    (e.g. you unchecked everyone to unlink a contact who's since left the
+    company) is a legitimate state, not an error -- an orphaned thread can
+    just be deleted later if you don't want it hanging around.
     """
-    if person_id_form:
-        return int(person_id_form)
+    if person_ids_form:
+        ids = [int(pid) for pid in person_ids_form if pid]
+        return db.query(models.Person).filter(models.Person.id.in_(ids)).all() if ids else []
     other_senders = parsed.get("other_senders") or []
     if not other_senders:
-        raise HTTPException(
-            400,
-            "Couldn't detect who this thread is with, so a Person is required. "
-            "Either pick one from the dropdown, or upload/paste a Gmail-exported "
-            "thread (Gmail's \"Print all\") so it can be detected automatically.",
-        )
-    primary = None
-    for sender in other_senders:
-        person = _find_or_create_person_by_email(
+        if required:
+            raise HTTPException(
+                400,
+                "Couldn't detect who this thread is with, so at least one Person is "
+                "required. Either pick one or more from the list, or upload/paste a "
+                "Gmail-exported thread (Gmail's \"Print all\") so it can be detected "
+                "automatically.",
+            )
+        return []
+    return [
+        _find_or_create_person_by_email(
             sender["email"], db, name=sender["name"], application_id=application_id
         )
-        if primary is None:
-            primary = person
-    return primary.id
+        for sender in other_senders
+    ]
 
 
 @router.post("/ui/email-threads")
 def create_email_thread_ui(
-    person_id: Optional[str] = Form(None),
+    person_ids: List[str] = Form([]),
     application_id: Optional[str] = Form(None),
     subject: str = Form(""),
     body: str = Form(""),
@@ -893,16 +906,16 @@ def create_email_thread_ui(
 
     If the text looks like a Gmail thread export, subject/participants/dates
     are auto-filled from it -- but only into fields you left blank, so
-    anything you typed by hand already wins. Person works the same way: leave
-    it on "auto-detect" and it's found-or-created by email address; pick one
-    explicitly and that always overrides detection.
+    anything you typed by hand already wins. People work the same way: leave
+    the list on "auto-detect" and everyone who actually sent a message is
+    found-or-created by email address and linked; pick people explicitly and
+    that always overrides detection.
     """
     body_text = _extract_upload_text(file) or (body or "").strip()
     parsed = parse_gmail_export(body_text)
     app_id = int(application_id) if application_id else None
-    resolved_person_id = _resolve_thread_person(person_id, parsed, db, app_id)
-    db.add(models.EmailThread(
-        person_id=resolved_person_id,
+    resolved_people = _resolve_thread_people(person_ids, parsed, db, app_id)
+    thread = models.EmailThread(
         application_id=app_id,
         subject=(subject or "").strip() or parsed["subject"],
         body=body_text or None,
@@ -910,7 +923,9 @@ def create_email_thread_ui(
         started_at=_parse_dt(started_at) or parsed["started_at"],
         last_message_at=_parse_dt(last_message_at) or parsed["last_message_at"],
         notes=notes or None,
-    ))
+    )
+    thread.people = resolved_people
+    db.add(thread)
     db.commit()
     return RedirectResponse(url="/email-threads", status_code=303)
 
@@ -923,13 +938,14 @@ def edit_email_thread_page(thread_id: int, request: Request, db: Session = Depen
         "thread": thread,
         "people": db.query(models.Person).order_by(models.Person.name).all(),
         "applications": db.query(models.JobApplication).all(),
+        "selected_person_ids": {p.id for p in thread.people},
     })
 
 
 @router.post("/ui/email-threads/{thread_id}/edit")
 def update_email_thread_ui(
     thread_id: int,
-    person_id: Optional[str] = Form(None),
+    person_ids: List[str] = Form([]),
     application_id: Optional[str] = Form(None),
     subject: str = Form(""),
     body: str = Form(""),
@@ -945,10 +961,12 @@ def update_email_thread_ui(
     the source of truth, so extraction glitches can be hand-fixed without
     re-uploading — same pattern as editing a Resume. As on create, a
     Gmail-shaped body only fills in fields left blank; it never overwrites
-    something already typed in the form -- and Person auto-detection only
+    something already typed in the form -- and People auto-detection only
     runs off a freshly uploaded file, never off the already-saved body, so
-    just re-saving the form can't unexpectedly reassign the thread to someone
-    else or spawn a duplicate Person.
+    just re-saving the form can't unexpectedly relink the thread to someone
+    else or spawn a duplicate Person. Leaving the People list checked as-is
+    (the normal case) simply keeps it unchanged, since the form always
+    submits the currently-checked people back as an explicit selection.
     """
     thread = _get_or_404(db, models.EmailThread, thread_id)
     extracted = _extract_upload_text(file)
@@ -958,7 +976,7 @@ def update_email_thread_ui(
         "other_senders": [],
     }
     app_id = int(application_id) if application_id else None
-    thread.person_id = _resolve_thread_person(person_id, parsed, db, app_id)
+    thread.people = _resolve_thread_people(person_ids, parsed, db, app_id, required=False)
     thread.application_id = app_id
     thread.subject = (subject or "").strip() or parsed["subject"]
     thread.body = body_text or None

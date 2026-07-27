@@ -4,10 +4,15 @@ The relationships encode the Salesforce analogy documented in ARCHITECTURE.md:
 
   * master-detail  -> NOT NULL FK + ON DELETE CASCADE
   * lookup         -> nullable FK + ON DELETE SET NULL
+  * many-to-many   -> join table, ON DELETE CASCADE on both FKs (removes the
+                      association row on either side's deletion, never the
+                      other side's actual row)
 
 Company (Account) is the master of Job Posting, Job Application, and Person.
 Stage History is the master-detail child of Job Application and is written
-automatically whenever an application's stage changes.
+automatically whenever an application's stage changes. Email Thread relates
+to Person through a many-to-many join table rather than a master-detail FK
+(see EmailThread's docstring below for why).
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
     event,
 )
@@ -176,7 +182,7 @@ class Resume(Base):
     __tablename__ = "resumes"
 
     id = Column(Integer, primary_key=True)
-    label = Column(String(255), nullable=False)  # e.g. "RevOps v3 - metrics-forward"
+    label = Column(String(255), nullable=False)  # e.g. "v3 - metrics-forward"
     content = Column(Text)  # extracted plain text (what analysis runs on)
     source_link = Column(String(1024))  # optional reference, e.g. a Google Drive URL
     filename = Column(String(512))  # original uploaded filename, if any
@@ -310,12 +316,16 @@ class Person(Base):
 
     company = relationship("Company", back_populates="people")
     application = relationship("JobApplication", back_populates="people")
-    # Master-detail child: an email thread is fundamentally a conversation
-    # with this person, so it cascades with them.
+    # Many-to-many: a thread can involve more than one person (an intro
+    # thread, a BCC'd hiring manager), and a person can be on more than one
+    # thread. No "primary" -- deleting a person just unlinks them from any
+    # threads they're on (removes their row in the join table below); it
+    # never deletes the thread itself, since other people may still be on
+    # it. See ARCHITECTURE.md.
     email_threads = relationship(
         "EmailThread",
-        back_populates="person",
-        cascade="all, delete-orphan",
+        secondary="email_thread_people",
+        back_populates="people",
         order_by="EmailThread.last_message_at",
     )
 
@@ -365,26 +375,40 @@ class Meeting(Base):
 
 
 # --------------------------------------------------------------------------- #
-# Email Thread  (== EmailMessage/Task on a Contact): a recruiter/HM exchange
+# Email Thread  (== Email/Task with multiple related Contacts): an exchange
 # --------------------------------------------------------------------------- #
+# Pure many-to-many join table, no extra columns and no distinguished
+# "primary" person -- every row is just "this person is on this thread".
+# CASCADE on both sides: deleting a thread clears its links; deleting a
+# person clears theirs. Neither side cascades into deleting the *other*
+# table's rows -- a thread survives losing one of several people on it, and
+# a person survives being removed from a thread (see ARCHITECTURE.md for why
+# a distinguished primary was dropped in favor of this).
+email_thread_people = Table(
+    "email_thread_people",
+    Base.metadata,
+    Column("email_thread_id", Integer, ForeignKey("email_threads.id", ondelete="CASCADE"), primary_key=True),
+    Column("person_id", Integer, ForeignKey("people.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 class EmailThread(Base):
     """A separate object from Meeting, not folded into it -- the shape is
     different (subject/body/participants and a message span, vs. a single
     dated event) and, like a Person's own company, a thread can predate any
     Application: a cold recruiter email lands in your inbox before you've
-    decided to pursue anything. So its master is Person (you're always
-    emailing *someone*), and the Application link is an optional lookup that
-    gets set once the thread is actually about a role you're pursuing.
+    decided to pursue anything. It relates to People through a many-to-many
+    join table (``email_thread_people``) rather than a single required FK,
+    because a real thread often involves more than one person (an intro
+    thread, a BCC'd hiring manager) and forcing a single "owner" misrepresents
+    that. The Application link is an optional lookup that gets set once the
+    thread is actually about a role you're pursuing.
     """
 
     __tablename__ = "email_threads"
 
     id = Column(Integer, primary_key=True)
 
-    # Master-detail to Person: cascades if the person is deleted.
-    person_id = Column(
-        Integer, ForeignKey("people.id", ondelete="CASCADE"), nullable=False, index=True
-    )
     # Lookup to an application (nullable): unset for pre-application outreach.
     application_id = Column(
         Integer,
@@ -408,8 +432,13 @@ class EmailThread(Base):
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
-    person = relationship("Person", back_populates="email_threads")
     application = relationship("JobApplication", back_populates="email_threads")
+    people = relationship(
+        "Person",
+        secondary=email_thread_people,
+        back_populates="email_threads",
+        order_by="Person.name",
+    )
 
 
 # --------------------------------------------------------------------------- #

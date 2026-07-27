@@ -9,6 +9,17 @@ data/*.sqlite
 data/*.sqlite3
 *.db-journal
 
+# --- Uploaded/exported source documents (resumes, email-thread PDFs, etc.)
+# These contain real personal data about you and about other people.
+uploads/
+*.pdf
+*.docx
+
+# --- Delivery tarballs extracted into the project folder ---
+*.tar.gz
+*.tgz
+*.zip
+
 # --- Python ---
 __pycache__/
 *.py[cod]

@@ -37,25 +37,29 @@ Job Application
  └── (master-detail) <── Stage History    (one row per stage change)
 
 Person
- ├── (lookup, nullable) ──> Job Application (the application this person is tied to)
- └── (master-detail) ──> Email Thread       (conversations with this person)
+ ├── (lookup, nullable) ──> Job Application  (the application this person is tied to)
+ └── (many-to-many) <──> Email Thread        (conversations involving this person)
 
 Email Thread
- └── (lookup, nullable) ──> Job Application (unset until the thread is about a role)
+ └── (lookup, nullable) ──> Job Application  (unset until the thread is about a role)
 ```
 
-### Master-detail vs. lookup — what it means here
+### Master-detail vs. lookup vs. many-to-many — what it means here
 
 In Salesforce, **master-detail** means the child cannot exist without the parent:
 a required parent, cascade delete, and the parent can roll up aggregates of its
 children. **Lookup** means an optional pointer: nullable, no forced cascade, no
-automatic rollups.
+automatic rollups. Neither fits a relationship where either side can have many
+of the other — that's **many-to-many**, via a join table.
 
 Because this app is plain SQLAlchemy/SQLite rather than the Salesforce platform,
 those concepts map directly to SQL:
 
 - **Master-detail** → `NOT NULL` foreign key with `ON DELETE CASCADE`.
 - **Lookup** → nullable foreign key, `ON DELETE SET NULL`.
+- **Many-to-many** → a join table with `ON DELETE CASCADE` on both foreign
+  keys, so deleting either side removes the *association*, never the other
+  side's actual row.
 
 ### Why Company has a *direct* master-detail to Job Application
 
@@ -159,9 +163,9 @@ pursuit of the role, not a specific call type:
   Screen + Hiring Manager Screen — both are mutual fact-finding, just at
   different depths).
 - **Takehome** — can you actually do the work, proven concretely. Named for
-  the specific artifact rather than a generic "Technical," since RevOps
-  hiring loops reliably include some form of takehome exercise even when
-  they're not coding-specific.
+  the specific artifact rather than a generic "Technical," since plenty of
+  non-engineering loops include some form of takehome exercise even when
+  it isn't coding-specific.
 - **Executive Signoff** — final internal approval, whether or not you're
   ever in the room for it — the candidate-side equivalent of a deal needing
   an economic buyer's blessing.
@@ -196,20 +200,27 @@ merged "Interaction" table:
   the Posting (JD) and Resume, which is what makes "questions asked, by JD /
   by resume" analysis possible. Shape: a single dated event (`meeting_date`)
   with a summary and transcript.
-- **Email Thread** — master-detail to **Person**, with only an optional
-  lookup to Job Application. A thread is fundamentally a conversation with
-  someone, and — like a Person's own company — that conversation can predate
-  any application: a cold recruiter email lands in your inbox before you've
-  decided to pursue anything. Forcing every thread to have an application
-  would make cold outreach impossible to log until after the fact. Shape:
-  a subject, a body, and a message span (`started_at` → `last_message_at`),
-  not a single instant.
+- **Email Thread** — many-to-many with **Person** (via the `email_thread_people`
+  join table), with only an optional lookup to Job Application. A thread is
+  fundamentally a conversation with one or more people, and — like a Person's
+  own company — that conversation can predate any application: a cold recruiter
+  email lands in your inbox before you've decided to pursue anything. Forcing
+  every thread to have an application would make cold outreach impossible to
+  log until after the fact. Shape: a subject, a body, and a message span
+  (`started_at` → `last_message_at`), not a single instant.
 
-Different masters, different required fields, different natural lifetimes —
-merging them would mean either making Application nullable on both (losing
-the not-null guarantee Meeting relies on) or forcing every early-stage email
-to fabricate an application it doesn't have yet. Two objects, cleanly typed,
-avoids both.
+Meeting keeps its master-detail to Application because a meeting can't exist
+without one — you don't sit down for an interview about nothing. Email Thread
+deliberately doesn't mirror that: it has neither a required master (no forced
+Application) nor a single required party (many-to-many Person, not a required
+FK) — see "Why Email Thread has no distinguished 'primary' person" below for
+why the latter was a later correction, not the original design.
+
+Different required fields, different natural lifetimes — merging Meeting and
+Email Thread into one object would mean either making Application nullable on
+both (losing the not-null guarantee Meeting relies on) or forcing every
+early-stage email to fabricate an application it doesn't have yet. Two
+objects, cleanly typed, avoids both.
 
 ### Ingestion: why manual paste/upload, not a live Gmail sync
 
@@ -247,15 +258,40 @@ in a field you left blank; anything typed by hand always wins, the same
 override principle used everywhere else auto-extraction touches a form
 (resume text, Granola-imported meeting fields).
 
+### Why Email Thread has no distinguished "primary" person
+
+The original design gave `EmailThread` a required `person_id` — a thread was
+always *with* one person. That broke on a real 3-way thread (a recruiter
+looping in a hiring manager): only the first sender got linked, and the
+other two people on the conversation were invisible from the thread and from
+their own Person record. Picking *which* sender should be "the" person is
+also inherently arbitrary — an intro thread doesn't have a primary party any
+more than a group email does.
+
+The fix was to drop the single required FK entirely in favor of a genuine
+many-to-many (`email_thread_people` join table, `ON DELETE CASCADE` on both
+sides — see "Master-detail vs. lookup vs. many-to-many" above). The
+deliberate trade-off: a thread can now end up with **zero** linked people
+(everyone unchecked, or the last linked person deleted) and that's treated
+as a valid state, not an error — an orphaned thread just sits there until
+you either relink it or delete it by hand. What master-detail would have
+given up for free — cascading the thread away when its "owner" is deleted —
+isn't worth reintroducing a fake distinguished owner to get back. See
+`test_deleting_only_linked_person_unlinks_but_thread_survives` and
+`test_thread_can_have_multiple_people_linked_at_once` in
+`tests/test_cascade_design.py`, and `migrate_email_thread_people()` in
+`app/database.py` for how existing single-person threads were carried over
+to the join table without losing data.
+
 ### Auto-creating People from a thread's senders
 
-`EmailThread.person_id` is required — a thread is always *with* someone —
-but you don't have to create that Person by hand first. The parser also
-extracts every real message **sender** (not just any email mentioned in the
-text) from the Gmail-shaped headers, and identifies which one is *you* from
-the account-owner banner line Gmail always prints at the top of an export.
-Whatever's left — the other side of the conversation — gets found-or-created
-as a Person automatically.
+You don't have to create a thread's People by hand before logging it. The
+parser extracts every real message **sender** (not just any email mentioned
+in the text) from the Gmail-shaped headers, and identifies which one is
+*you* from the account-owner banner line Gmail always prints at the top of
+an export. Whatever's left — everyone else on the conversation — gets
+found-or-created as a Person automatically, and **all** of them are linked to
+the thread, not just the first one.
 
 **Email address is the dedup key**, compared case-insensitively: the same
 address always resolves to the same Person, whether it shows up in this
@@ -279,17 +315,21 @@ Interviewer.
 
 If a thread has more than one non-you sender (e.g. a recruiter loops in a
 hiring manager mid-thread), every one of them gets found-or-created as a
-Person — useful on its own, since your People list fills in as a side
-effect of just logging threads — but the thread's own `person_id` only ever
-points at the *first* sender, in message order, since the schema is one
-thread → one person. An explicit pick in the Person dropdown always
-overrides auto-detection, same override rule as every other auto-filled
-field on this form. If the text isn't Gmail-shaped and you didn't pick a
-Person by hand, thread creation fails with a clear error rather than
-guessing — see `_resolve_thread_person()` in `app/routers/ui.py`. This whole
-path is proven against representative cases (case-insensitive matching, a
-brand-new email, a second person at a known company, two threads landing on
-two different companies) in `tests/test_person_from_email.py`.
+Person **and** linked to the thread — useful on its own, since your People
+list fills in as a side effect of just logging threads, and matches what the
+thread actually was: a conversation with more than one person at once. An
+explicit selection in the People checkbox list always overrides
+auto-detection entirely (any box checked means "use exactly this set," not
+"add to the detected set"), same override rule as every other auto-filled
+field on this form. On create, if the text isn't Gmail-shaped and nothing
+was checked by hand, thread creation fails with a clear error rather than
+guessing; on edit, leaving everyone unchecked with nothing auto-detectable
+is allowed and just unlinks the thread from everyone (see "Why Email Thread
+has no distinguished 'primary' person" above) — see
+`_resolve_thread_people()` in `app/routers/ui.py`. This whole path is proven
+against representative cases (case-insensitive matching, a brand-new email,
+a second person at a known company, two threads landing on two different
+companies) in `tests/test_person_from_email.py`.
 
 ### One timeline, two objects
 

@@ -122,6 +122,92 @@ def migrate_stage_names():
         )
 
 
+def migrate_email_thread_people():
+    """One-time migration: replace EmailThread's old single required
+    ``person_id`` column with the new many-to-many ``email_thread_people``
+    join table (see models.py's EmailThread docstring for why a
+    distinguished "primary" person was dropped). Safe to run on every
+    startup: once ``person_id`` is gone from the table, this is a no-op.
+
+    SQLite can't ALTER a column's NOT NULL/FK constraints away in place, so
+    this uses SQLite's own documented "twelve-step" procedure for changing a
+    table's shape: build the new shape under a temp name, copy the data
+    across, drop the old table, rename the new one into place.
+
+    Ordering matters here in a way that's easy to get backwards: the
+    person_id -> join-table backfill data is read into memory *before* the
+    old table is dropped, not inserted into the join table first. That's
+    deliberate -- with foreign_keys=ON (which this app always sets), SQLite
+    treats `DROP TABLE email_threads` as an implicit `DELETE FROM
+    email_threads` first, which would CASCADE and wipe out any
+    email_thread_people rows already inserted, since they reference
+    email_threads.id with ON DELETE CASCADE. Reading first and inserting
+    after the rebuild sidesteps that entirely. Proven against exactly this
+    failure mode in tests/test_email_thread_people_migration.py.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if not inspector.has_table("email_threads"):
+        return  # fresh install; create_all already made the current shape
+    existing_cols = {col["name"] for col in inspector.get_columns("email_threads")}
+    if "person_id" not in existing_cols:
+        return  # already migrated
+
+    with engine.begin() as conn:
+        # 1. Read the old links into memory before touching the table.
+        old_links = conn.execute(
+            text("SELECT id, person_id FROM email_threads WHERE person_id IS NOT NULL")
+        ).fetchall()
+
+        # 2. Rebuild email_threads without person_id.
+        conn.execute(text("""
+            CREATE TABLE email_threads_new (
+                id INTEGER PRIMARY KEY,
+                application_id INTEGER REFERENCES job_applications(id) ON DELETE SET NULL,
+                subject VARCHAR(512),
+                body TEXT,
+                participants VARCHAR(512),
+                started_at DATETIME,
+                last_message_at DATETIME,
+                notes TEXT,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+        """))
+        conn.execute(text(
+            "INSERT INTO email_threads_new "
+            "(id, application_id, subject, body, participants, started_at, "
+            " last_message_at, notes, created_at, updated_at) "
+            "SELECT id, application_id, subject, body, participants, started_at, "
+            "       last_message_at, notes, created_at, updated_at "
+            "FROM email_threads"
+        ))
+        conn.execute(text("DROP TABLE email_threads"))
+        conn.execute(text("ALTER TABLE email_threads_new RENAME TO email_threads"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_email_threads_application_id "
+            "ON email_threads (application_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_email_threads_last_message_at "
+            "ON email_threads (last_message_at)"
+        ))
+
+        # 3. Backfill the join table now -- email_threads.id values are
+        #    unchanged by the rebuild, so the links read in step 1 are still
+        #    valid. INSERT OR IGNORE guards re-running against a partially
+        #    populated join table.
+        for thread_id, person_id in old_links:
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO email_thread_people (email_thread_id, person_id) "
+                    "VALUES (:t, :p)"
+                ),
+                {"t": thread_id, "p": person_id},
+            )
+
+
 def get_db():
     """FastAPI dependency that yields a request-scoped session."""
     db = SessionLocal()

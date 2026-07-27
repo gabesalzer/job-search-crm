@@ -51,7 +51,7 @@
     </div>
   </form>
   <form method="post" action="/ui/people/{{ person.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
-        onsubmit="return confirm('Delete {{ person.name }}? This also deletes any email threads logged with them. This cannot be undone.');">
+        onsubmit="return confirm('Delete {{ person.name }}? Any email threads with them stay -- they just lose this link (other people on those threads are unaffected). This cannot be undone.');">
     <button type="submit" class="linkbtn danger">Delete this person</button>
   </form>
 </div>
