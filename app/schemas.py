@@ -7,6 +7,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from .models import (
+    ApplicationSource,
     CompanyType,
     LostReason,
     PersonRole,
@@ -102,6 +103,11 @@ class JobApplicationBase(BaseModel):
     stage: Stage = Stage.QUALIFICATION
     applied_date: Optional[datetime] = None
     notes: Optional[str] = None
+    # Standing viability context, kept separate from the running `notes` log.
+    context: Optional[str] = None
+    # Defaults to None rather than a source, so an omitted field reads as
+    # "unrecorded" instead of silently asserting one of the three origins.
+    source: Optional[ApplicationSource] = None
 
 
 class JobApplicationCreate(JobApplicationBase):

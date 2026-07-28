@@ -34,6 +34,7 @@ STAGE_VALUES = [s.value for s in models.Stage]          # ordered; Closed Lost l
 COMPANY_TYPES = [t.value for t in models.CompanyType]
 LOST_REASON_VALUES = [r.value for r in models.LostReason]
 PERSON_ROLE_VALUES = [r.value for r in models.PersonRole]
+APPLICATION_SOURCE_VALUES = [s.value for s in models.ApplicationSource]
 
 
 def _get_or_404(db: Session, model, obj_id: int):
@@ -41,6 +42,110 @@ def _get_or_404(db: Session, model, obj_id: int):
     if not obj:
         raise HTTPException(404, f"{model.__name__} not found")
     return obj
+
+
+def _parse_score(value: Optional[str]) -> Optional[int]:
+    """Parse a 0-100 win-likelihood score off a form field.
+
+    Blank means "not scored" and is a first-class answer, not an error -- most
+    meetings and threads never get a number, and forcing a default would put
+    fabricated readings into what is meant to become calibration data.
+
+    Out-of-range input is **clamped**, not rejected. This is the whole
+    validation story for `score`: there is no CHECK constraint backing it,
+    because `ensure_schema()` only ever issues ADD COLUMN and could never add
+    one to the existing tables. Guarding at the only door that writes the
+    column keeps the invariant real without a migration path we don't have.
+    Garbage that isn't a number at all (a stray letter) is treated as "not
+    scored" rather than a 500 -- a typo in an optional field shouldn't lose
+    the rest of the form.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        score = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, score))
+
+
+def _apply_score(obj, raw_score: Optional[str], reason: str) -> None:
+    """Write a score + reason onto a Meeting or Email Thread, stamping
+    `scored_at` when the number itself moves.
+
+    Both objects carry the identical (score, score_reason, scored_at) trio, so
+    they share one writer -- if the stamping rule ever changes it changes in
+    one place and the two activity types can't drift apart.
+
+    `scored_at` is re-stamped only when the *number* changes. Fixing a typo in
+    the reason text isn't a new judgment, and re-dating it would corrupt the
+    ordering the trend rollup reads. Clearing the score clears the timestamp
+    with it, so an unscored activity never carries a stale "scored on" date.
+    """
+    new_score = _parse_score(raw_score)
+    if new_score is None:
+        obj.score = None
+        obj.score_reason = None
+        obj.scored_at = None
+        return
+    if new_score != obj.score or obj.scored_at is None:
+        obj.scored_at = datetime.now(timezone.utc)
+    obj.score = new_score
+    obj.score_reason = (reason or "").strip() or None
+
+
+def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
+    """Derive "where does this application stand" from its scored activities.
+
+    Computed at display time from the Meeting/EmailThread rows rather than
+    stored on the Application. Nothing to keep in sync, and the rollup can
+    never disagree with the rows it summarizes -- rescore a meeting and the
+    application's number moves on the next page load, with no backfill.
+
+    Ordering uses `scored_at` (when you formed the judgment) and falls back to
+    the activity's own date, because a score entered days later still belongs
+    at the point in the sequence where you made the call. `latest` is the most
+    recent reading; `delta` is the change from the one before it, which is the
+    part that actually carries information -- a 55 on its own says little, a
+    55 that was 80 last week says the pursuit is cooling.
+
+    Returns None when nothing has been scored, so the template can stay quiet
+    instead of rendering an empty widget.
+    """
+    def _sortable(dt: Optional[datetime]) -> datetime:
+        # Form-entered dates come back naive; `scored_at` is stamped in UTC and
+        # comes back aware. Comparing the two raises, so flatten to naive UTC
+        # before sorting rather than letting the mix reach the comparison.
+        if dt is None:
+            return datetime.min
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+
+    scored: list[tuple[datetime, int]] = []
+    for m in app_obj.meetings:
+        if m.score is not None:
+            scored.append((_sortable(m.scored_at or m.meeting_date), m.score))
+    for t in app_obj.email_threads:
+        if t.score is not None:
+            scored.append((
+                _sortable(t.scored_at or t.last_message_at or t.started_at),
+                t.score,
+            ))
+    if not scored:
+        return None
+    scored.sort(key=lambda row: row[0])
+    latest = scored[-1][1]
+    previous = scored[-2][1] if len(scored) > 1 else None
+    return {
+        "latest": latest,
+        "previous": previous,
+        "delta": None if previous is None else latest - previous,
+        "count": len(scored),
+    }
 
 
 @router.get("/")
@@ -60,6 +165,7 @@ def board(request: Request, db: Session = Depends(get_db)):
         "active": "board",
         "stages": STAGE_VALUES,
         "grouped": grouped,
+        "sources": APPLICATION_SOURCE_VALUES,
         "companies": db.query(models.Company).order_by(models.Company.name).all(),
         "resumes": db.query(models.Resume).order_by(models.Resume.label).all(),
         "postings": db.query(models.JobPosting)
@@ -75,6 +181,7 @@ def create_application_ui(
     stage: str = Form("Saved"),
     resume_id: Optional[str] = Form(None),
     job_posting_id: Optional[str] = Form(None),
+    source: str = Form(""),
     db: Session = Depends(get_db),
 ):
     app_obj = models.JobApplication(
@@ -83,6 +190,7 @@ def create_application_ui(
         stage=models.Stage(stage),
         resume_id=int(resume_id) if resume_id else None,
         job_posting_id=int(job_posting_id) if job_posting_id else None,
+        source=models.ApplicationSource(source) if source else None,
     )
     db.add(app_obj)
     db.commit()
@@ -93,7 +201,7 @@ def _activity_timeline(app_obj: models.JobApplication) -> list[dict]:
     """Merge Meetings and Email Threads into one chronologically-sorted list
     for the Application page. Purely a display-layer merge (no new table,
     no schema change) -- each side keeps its own shape, we just normalize
-    both into a common {type, when, title, sub, url} dict and sort by the
+    both into a common {type, when, title, sub, url, score} dict and sort by the
     timestamp that best represents "most recent activity" for that row:
     meeting_date for a Meeting, last_message_at for an Email Thread (so a
     thread with a fresh reply surfaces near the top, not buried at the date
@@ -107,6 +215,7 @@ def _activity_timeline(app_obj: models.JobApplication) -> list[dict]:
             "title": m.title or "Untitled meeting",
             "sub": m.meeting_type.value if m.meeting_type else None,
             "url": f"/meetings/{m.id}/edit",
+            "score": m.score,
         })
     for t in app_obj.email_threads:
         rows.append({
@@ -115,6 +224,7 @@ def _activity_timeline(app_obj: models.JobApplication) -> list[dict]:
             "title": t.subject or "Untitled thread",
             "sub": ", ".join(p.name for p in t.people) or None,
             "url": f"/email-threads/{t.id}/edit",
+            "score": t.score,
         })
     rows.sort(key=lambda r: r["when"] or datetime.min, reverse=True)
     return rows
@@ -128,12 +238,14 @@ def edit_application_page(application_id: int, request: Request, db: Session = D
         "app_obj": app_obj,
         "stages": STAGE_VALUES,
         "lost_reasons": LOST_REASON_VALUES,
+        "sources": APPLICATION_SOURCE_VALUES,
         "companies": db.query(models.Company).order_by(models.Company.name).all(),
         "resumes": db.query(models.Resume).order_by(models.Resume.label).all(),
         "postings": db.query(models.JobPosting)
         .order_by(models.JobPosting.last_seen_at.desc())
         .all(),
         "activity": _activity_timeline(app_obj),
+        "score_rollup": _score_rollup(app_obj),
     })
 
 
@@ -148,6 +260,8 @@ def update_application_ui(
     lost_reason: str = Form(""),
     applied_date: str = Form(""),
     notes: str = Form(""),
+    context: str = Form(""),
+    source: str = Form(""),
     db: Session = Depends(get_db),
 ):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
@@ -157,6 +271,11 @@ def update_application_ui(
     app_obj.job_posting_id = int(job_posting_id) if job_posting_id else None
     app_obj.applied_date = _parse_dt(applied_date)
     app_obj.notes = notes or None
+    app_obj.context = context or None
+    # Blank stays NULL rather than defaulting to a source -- "we never recorded
+    # how this one started" and "this one was outbound" are different facts,
+    # and collapsing them would quietly bias any later source-conversion read.
+    app_obj.source = models.ApplicationSource(source) if source else None
 
     new_stage = models.Stage(stage)
     if new_stage != app_obj.stage:
@@ -650,9 +769,11 @@ def create_meeting_ui(
     notes: str = Form(""),
     granola_note_id: str = Form(""),
     granola_link: str = Form(""),
+    score: str = Form(""),
+    score_reason: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    db.add(models.Meeting(
+    meeting = models.Meeting(
         application_id=application_id,
         title=title or None,
         meeting_type=models.MeetingType(meeting_type) if meeting_type else None,
@@ -662,7 +783,9 @@ def create_meeting_ui(
         notes=notes or None,
         granola_note_id=granola_note_id or None,
         granola_link=granola_link or None,
-    ))
+    )
+    _apply_score(meeting, score, score_reason)
+    db.add(meeting)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
 
@@ -691,6 +814,8 @@ def update_meeting_ui(
     notes: str = Form(""),
     granola_note_id: str = Form(""),
     granola_link: str = Form(""),
+    score: str = Form(""),
+    score_reason: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Update a meeting. This is also how you (re)attach a Granola transcript:
@@ -710,6 +835,7 @@ def update_meeting_ui(
     meeting.notes = notes or None
     meeting.granola_note_id = granola_note_id or None
     meeting.granola_link = granola_link or None
+    _apply_score(meeting, score, score_reason)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
 
@@ -896,6 +1022,8 @@ def create_email_thread_ui(
     started_at: str = Form(""),
     last_message_at: str = Form(""),
     notes: str = Form(""),
+    score: str = Form(""),
+    score_reason: str = Form(""),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
@@ -924,6 +1052,7 @@ def create_email_thread_ui(
         last_message_at=_parse_dt(last_message_at) or parsed["last_message_at"],
         notes=notes or None,
     )
+    _apply_score(thread, score, score_reason)
     thread.people = resolved_people
     db.add(thread)
     db.commit()
@@ -953,6 +1082,8 @@ def update_email_thread_ui(
     started_at: str = Form(""),
     last_message_at: str = Form(""),
     notes: str = Form(""),
+    score: str = Form(""),
+    score_reason: str = Form(""),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
@@ -984,6 +1115,7 @@ def update_email_thread_ui(
     thread.started_at = _parse_dt(started_at) or parsed["started_at"]
     thread.last_message_at = _parse_dt(last_message_at) or parsed["last_message_at"]
     thread.notes = notes or None
+    _apply_score(thread, score, score_reason)
     db.commit()
     return RedirectResponse(url="/email-threads", status_code=303)
 

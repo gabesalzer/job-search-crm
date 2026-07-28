@@ -44,7 +44,7 @@ app_obj = SimpleNamespace(
     id=4, title="Sr. Operations Manager", company_id=1, company=company, stage=enum("Applied"),
     lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
-    email_threads=[],
+    email_threads=[], context="Team is 4 people; comp band unclear.", source=enum("Referral"),
     stage_history=[
         SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
         SimpleNamespace(id=11, from_stage=enum("Saved"), to_stage=enum("Applied"), changed_at=datetime(2026, 7, 1, 10, 0)),
@@ -56,6 +56,7 @@ meeting = SimpleNamespace(
     meeting_date=datetime(2026, 7, 10, 15, 0), summary="Went well", transcript="Me: Hi\nThem: Hi",
     notes="", granola_note_id="abc123", granola_link="https://granola.ai/notes/abc123",
     application_id=4, application=app_obj,
+    score=70, score_reason="Strong signal on scope", scored_at=datetime(2026, 7, 10, 18, 0),
 )
 app_obj.meetings = [meeting]  # circular-ish, but fine for a render smoke test
 
@@ -71,15 +72,24 @@ thread = SimpleNamespace(
     participants="jane@plaid.com, me@gmail.com", started_at=datetime(2026, 6, 20, 9, 0),
     last_message_at=datetime(2026, 6, 22, 14, 30), notes="Follow up next week",
     people=[person], application_id=4, application=app_obj,
+    score=55, score_reason="Polite but slow to reply", scored_at=datetime(2026, 6, 22, 15, 0),
 )
 person.email_threads = [thread]
 app_obj.email_threads = [thread]
 
 activity = [
     {"type": "Email", "when": thread.last_message_at, "title": thread.subject,
-     "sub": ", ".join(p.name for p in thread.people), "url": f"/email-threads/{thread.id}/edit"},
-    {"type": "Meeting", "when": meeting.meeting_date, "title": meeting.title, "sub": meeting.meeting_type.value, "url": f"/meetings/{meeting.id}/edit"},
+     "sub": ", ".join(p.name for p in thread.people), "url": f"/email-threads/{thread.id}/edit",
+     "score": thread.score},
+    {"type": "Meeting", "when": meeting.meeting_date, "title": meeting.title,
+     "sub": meeting.meeting_type.value, "url": f"/meetings/{meeting.id}/edit",
+     "score": meeting.score},
 ]
+
+# Mirrors what ui._score_rollup() returns: latest reading plus the change from
+# the one before it. Kept as a literal so the template can be smoke-tested
+# without importing the app package (which needs FastAPI/SQLAlchemy).
+score_rollup = {"latest": 70, "previous": 55, "delta": 15, "count": 2}
 
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
@@ -89,6 +99,38 @@ cases = [
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "score_rollup": score_rollup,
+    }),
+    # Nothing scored yet: the rollup is None and the widget should stay hidden
+    # rather than rendering an empty box -- the common state for a brand-new
+    # application, so it's the one most worth smoke-testing.
+    ("application_edit.html (unscored)", {
+        "active": "board",
+        "app_obj": SimpleNamespace(**{**app_obj.__dict__, "source": None, "context": None}),
+        "stages": ["Saved", "Applied", "Closed Lost"],
+        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "postings": [posting],
+        "activity": [{**row, "score": None} for row in activity],
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "score_rollup": None,
+    }),
+    # A downward move, to exercise the other branch of the trend pill.
+    ("application_edit.html (cooling)", {
+        "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
+        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "postings": [posting], "activity": activity,
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "score_rollup": {"latest": 30, "previous": 70, "delta": -40, "count": 3},
+    }),
+    # A single scored activity: there's no prior reading, so delta is None and
+    # the trend pill has to be skipped without blowing up on the comparison.
+    ("application_edit.html (first score)", {
+        "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
+        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "postings": [posting], "activity": activity,
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "score_rollup": {"latest": 40, "previous": None, "delta": None, "count": 1},
     }),
     ("meeting_edit.html", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],
@@ -96,6 +138,23 @@ cases = [
     }),
     ("meeting_edit.html (granola disabled)", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],
+        "meeting_types": ["Hiring Manager", "Technical"], "granola_enabled": False,
+    }),
+    # score=None is the default state for most meetings, and `0` is a legal
+    # score that must not be confused with "unscored" -- both branches of the
+    # `is not none` checks in the template need to render.
+    ("meeting_edit.html (unscored)", {
+        "active": "meetings",
+        "meeting": SimpleNamespace(**{
+            **meeting.__dict__, "score": None, "score_reason": None, "scored_at": None,
+        }),
+        "applications": [app_obj],
+        "meeting_types": ["Hiring Manager", "Technical"], "granola_enabled": False,
+    }),
+    ("meeting_edit.html (zero score)", {
+        "active": "meetings",
+        "meeting": SimpleNamespace(**{**meeting.__dict__, "score": 0}),
+        "applications": [app_obj],
         "meeting_types": ["Hiring Manager", "Technical"], "granola_enabled": False,
     }),
     ("companies.html", {"active": "companies", "companies": [company], "company_types": ["Employer"]}),
@@ -109,6 +168,7 @@ cases = [
         "active": "board", "stages": ["Saved", "Applied"],
         "grouped": {"Saved": [], "Applied": [app_obj]}, "companies": [company],
         "resumes": [resume], "postings": [posting],
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
     }),
     ("people.html", {
         "active": "people", "people": [person], "companies": [company],
@@ -142,6 +202,13 @@ cases = [
         "active": "emails",
         "thread": SimpleNamespace(**{**thread.__dict__, "people": []}),
         "people": [person], "applications": [app_obj], "selected_person_ids": set(),
+    }),
+    ("email_thread_edit.html (unscored)", {
+        "active": "emails",
+        "thread": SimpleNamespace(**{
+            **thread.__dict__, "score": None, "score_reason": None, "scored_at": None,
+        }),
+        "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
     }),
 ]
 

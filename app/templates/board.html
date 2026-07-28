@@ -43,6 +43,13 @@
           {% for r in resumes %}<option value="{{ r.id }}">{{ r.label }}</option>{% endfor %}
         </select>
       </div>
+      <div class="field">
+        <label>Source</label>
+        <select name="source">
+          <option value="">—</option>
+          {% for s in sources %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </div>
       <div class="field"><button class="btn" type="submit">Add</button></div>
     </div>
   </form>
@@ -71,6 +78,7 @@
         <div class="co">{{ app.company.name if app.company else "—" }}</div>
         <div class="metarow">
           {% if app.resume %}<span class="tag">{{ app.resume.label }}</span>{% endif %}
+          {% if app.source %}<span class="tag" title="How this application originated">{{ app.source.value }}</span>{% endif %}
           {% if app.lost_reason %}<span class="tag">{{ app.lost_reason.value }}</span>{% endif %}
         </div>
       </div>

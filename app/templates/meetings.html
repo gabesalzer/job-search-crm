@@ -47,6 +47,11 @@
     <div class="form-grid" style="margin-top:0.5rem">
       <div class="field"><label>Granola link (optional)</label><input name="granola_link" placeholder="https://"></div>
       <div class="field"><label>Your notes (optional)</label><input name="notes"></div>
+      <div class="field">
+        <label>Win-likelihood score (0–100, optional)</label>
+        <input name="score" type="number" min="0" max="100" step="1" placeholder="blank if not scored">
+      </div>
+      <div class="field"><label>Why (optional)</label><input name="score_reason" placeholder="what moved the number"></div>
     </div>
     <div style="margin-top:0.6rem"><button class="btn" type="submit">Add meeting</button></div>
   </form>
@@ -61,7 +66,10 @@
   <div class="panel">
     <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
       <strong>{{ m.title or "Untitled meeting" }}</strong>
-      {% if m.meeting_type %}<span class="pill">{{ m.meeting_type.value }}</span>{% endif %}
+      <span style="display:flex;gap:0.35rem;align-items:center;white-space:nowrap">
+        {% if m.score is not none %}<span class="pill" title="Win-likelihood score{% if m.score_reason %}: {{ m.score_reason }}{% endif %}">{{ m.score }}</span>{% endif %}
+        {% if m.meeting_type %}<span class="pill">{{ m.meeting_type.value }}</span>{% endif %}
+      </span>
     </div>
     <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
       {% if m.application %}<a href="/applications/{{ m.application.id }}/edit">{{ m.application.title or "Untitled" }}</a>{% else %}—{% endif %}

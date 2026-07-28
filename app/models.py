@@ -13,6 +13,39 @@ Stage History is the master-detail child of Job Application and is written
 automatically whenever an application's stage changes. Email Thread relates
 to Person through a many-to-many join table rather than a master-detail FK
 (see EmailThread's docstring below for why).
+
+Scoring
+-------
+Meeting and Email Thread each carry a nullable `score` (0-100), a
+`score_reason`, and a `scored_at`. The score answers one question: *given
+what just happened in this interaction, how likely is this application to
+end up Closed Won?*
+
+The score lives on the **activity**, not on the Application, on purpose. A
+single number on the Application would only ever tell you where you stand
+right now; a reading attached to each interaction turns the same data into a
+time series, so you can see a pursuit gaining or losing momentum (55 -> 70
+-> 30 after an interview that went badly) rather than just its latest value.
+The Application derives "current score + trend" from these at display time —
+no stored column, so there's nothing to keep in sync and no chance of the
+rollup disagreeing with the rows it came from.
+
+Two deliberate consequences:
+
+  * `scored_at` is separate from the activity's own date because you might
+    score a meeting days after it happened, and calibration analysis later
+    needs to know when you formed the judgment, not just when you talked.
+  * Nothing writes `score` automatically today — you enter it. The three
+    columns are shaped so an automated scorer (an LLM reading the transcript
+    or thread body) can populate exactly the same fields later without a
+    schema change or a backfill; `score_reason` is where its rationale would
+    go, the same place yours does.
+
+Because every scored activity hangs off an application that eventually
+reaches a terminal stage, these scores accumulate into labeled training data
+for free: "when I scored 70 after a hiring-manager call, how often did that
+actually close?" is answerable from `score` + `Stage`, and is the reason the
+reason-text is captured rather than the bare number.
 """
 from __future__ import annotations
 
@@ -103,6 +136,23 @@ class PersonRole(str, enum.Enum):
     INTERVIEWER = "Interviewer"
     REFERRAL = "Referral"
     OTHER = "Other"
+
+
+class ApplicationSource(str, enum.Enum):
+    """How this application originated.
+
+    Deliberately about *origin*, not about who a person is: a referral from a
+    friend and an inbound note from that friend's in-house recruiter are two
+    different sources even if both eventually route through the same recruiter.
+    Nullable on the model, because applications created before this field
+    existed genuinely don't know their own answer -- better an honest blank
+    than a defaulted guess that pollutes any later "which source converts
+    best" analysis.
+    """
+
+    REFERRAL = "Referral"
+    RECRUITER_INBOUND = "Recruiter Inbound"
+    OUTBOUND = "Outbound"
 
 
 # --------------------------------------------------------------------------- #
@@ -222,6 +272,20 @@ class JobApplication(Base):
     title = Column(String(512))  # denormalized role title for convenience
     applied_date = Column(DateTime)
     last_activity_date = Column(DateTime, default=_utcnow)
+
+    # How the application originated (see ApplicationSource). Nullable.
+    source = Column(Enum(ApplicationSource), index=True)
+
+    # Standing context on the opportunity itself: why this role is worth
+    # pursuing, what you know about the team/comp/timeline, what would make you
+    # walk. Deliberately separate from `notes`:
+    #   * `context` is durable input you'd re-read when judging viability, and
+    #     is the field a viability assessment reads from.
+    #   * `notes` stays a running scratchpad of whatever happened lately.
+    # Keeping them apart means a viability check has a stable thing to read
+    # instead of having to sift a chronological log.
+    context = Column(Text)
+
     notes = Column(Text)
 
     created_at = Column(DateTime, default=_utcnow)
@@ -248,8 +312,9 @@ class JobApplication(Base):
         order_by="Meeting.meeting_date",
     )
     # Email threads optionally tied to this application (lookup from the
-    # EmailThread side — its real master is Person, not Application, so this
-    # doesn't cascade; deleting the application just clears the link).
+    # EmailThread side — a thread's people are a many-to-many, and Application
+    # is only ever an optional lookup on it, so this doesn't cascade;
+    # deleting the application just clears the link).
     email_threads = relationship(
         "EmailThread",
         back_populates="application",
@@ -365,6 +430,11 @@ class Meeting(Base):
     transcript = Column(Text)   # full transcript — where the questions live
     notes = Column(Text)        # your own notes
 
+    # --- Win-likelihood score (see the module note on scoring) ---
+    score = Column(Integer)             # 0-100, nullable = not scored
+    score_reason = Column(Text)         # why you landed on that number
+    scored_at = Column(DateTime)        # when the reading was taken
+
     granola_note_id = Column(String(255), index=True)  # for linking / de-dup
     granola_link = Column(String(1024))
 
@@ -428,6 +498,11 @@ class EmailThread(Base):
     last_message_at = Column(DateTime, index=True)
 
     notes = Column(Text)
+
+    # --- Win-likelihood score (see the module note on scoring) ---
+    score = Column(Integer)             # 0-100, nullable = not scored
+    score_reason = Column(Text)         # why you landed on that number
+    scored_at = Column(DateTime)        # when the reading was taken
 
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

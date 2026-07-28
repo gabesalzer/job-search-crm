@@ -55,6 +55,22 @@
     </div>
     <div class="field" style="margin-top:0.5rem"><label>Body</label><textarea name="body" rows="10">{{ thread.body or '' }}</textarea></div>
     <div class="field" style="margin-top:0.5rem"><label>Your notes (optional)</label><input name="notes" value="{{ thread.notes or '' }}"></div>
+    <div style="margin-top:0.9rem;padding-top:0.8rem;border-top:1px solid var(--line)">
+      <div class="form-grid">
+        <div class="field">
+          <label>Win-likelihood score (0–100)</label>
+          <input name="score" type="number" min="0" max="100" step="1" value="{{ thread.score if thread.score is not none else '' }}" placeholder="leave blank if not scored">
+        </div>
+        <div class="field">
+          <label>Why</label>
+          <input name="score_reason" value="{{ thread.score_reason or '' }}" placeholder="what moved the number">
+        </div>
+      </div>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0.3rem 0 0">
+        Given how this thread is going, how likely is the application to end up Closed Won? Blank means unscored — leave it blank rather than guessing, since these readings are meant to be checkable against the eventual outcome.
+        {% if thread.scored_at %}<br>Last scored {{ thread.scored_at.strftime("%b %d, %Y") }}.{% endif %}
+      </p>
+    </div>
     <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
       <button class="btn" type="submit">Save changes</button>
       <a class="btn secondary" href="/email-threads">Cancel</a>

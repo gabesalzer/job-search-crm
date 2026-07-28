@@ -41,7 +41,14 @@
       <input name="file" type="file" accept=".pdf,.docx,.txt,.md">
     </div>
     <div class="field" style="margin-top:0.5rem"><label>Or paste thread text</label><textarea name="body" rows="6" placeholder="Paste the email thread here if you're not uploading a file"></textarea></div>
-    <div class="field" style="margin-top:0.5rem"><label>Your notes (optional)</label><input name="notes"></div>
+    <div class="form-grid" style="margin-top:0.5rem">
+      <div class="field"><label>Your notes (optional)</label><input name="notes"></div>
+      <div class="field">
+        <label>Win-likelihood score (0–100, optional)</label>
+        <input name="score" type="number" min="0" max="100" step="1" placeholder="blank if not scored">
+      </div>
+      <div class="field"><label>Why (optional)</label><input name="score_reason" placeholder="what moved the number"></div>
+    </div>
     <div style="margin-top:0.6rem"><button class="btn" type="submit">Add email thread</button></div>
   </form>
 </details>
@@ -52,7 +59,10 @@
   <div class="panel">
     <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
       <strong>{{ t.subject or "Untitled thread" }}</strong>
-      {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted);white-space:nowrap">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
+      <span style="display:flex;gap:0.4rem;align-items:center;white-space:nowrap">
+        {% if t.score is not none %}<span class="pill" title="Win-likelihood score{% if t.score_reason %}: {{ t.score_reason }}{% endif %}">{{ t.score }}</span>{% endif %}
+        {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted)">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
+      </span>
     </div>
     <div style="color:var(--muted);font-size:0.82rem;margin-top:0.2rem">
       {{ t.people|map(attribute='name')|join(', ') if t.people else "no one linked" }}

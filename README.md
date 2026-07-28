@@ -70,7 +70,13 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   exist yet. Rate postings ▲ / — / ▼ to record what you're looking for.
 - **Pipeline**: *New application* → optionally pick a posting to link it and
   auto-fill company + title. Drag cards between stage columns; every move is
-  written to stage history.
+  written to stage history. Each application also carries a **Source**
+  (Referral / Recruiter Inbound / Outbound — how it originated) and a
+  **Context** field: standing notes on why the role is worth pursuing, what
+  you know about team, comp, and timeline, and what would make you walk.
+  Context is deliberately separate from Notes — Context is durable input
+  you'd re-read when judging whether to keep spending effort here, while
+  Notes stays a running log of what happened lately.
 - **Companies**: employers and staffing agencies, typed so you can later report
   on which employers vs. which agencies get you traction.
 - **Meetings**: interviews and calls, attached to an application. Capture the
@@ -100,6 +106,29 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   already matches). An application's edit page shows an **Activity** related
   list that merges its meetings and email threads into one chronological
   timeline.
+- **Scoring**: every meeting and email thread can carry a **win-likelihood
+  score** — 0–100, your best guess at how likely that application is to end
+  up Closed Won given what just happened — plus a one-line reason. The score
+  lives on the interaction rather than on the application on purpose: a
+  single number on the application would only ever tell you where you stand
+  now, while a reading per interaction turns the same judgments into a trend
+  you can watch (80 → 55 → 30 after an interview that went badly). The
+  application's edit page rolls these up at the top of its Activity list as
+  a current number plus the change from the previous reading, and each row
+  in the timeline shows its own score. Leave it blank when you haven't
+  formed a view — blank means unscored, and `0` means you think it's dead;
+  they're different answers, and the app keeps them apart. Nothing fills
+  these in automatically today: you enter the number, and the fields are
+  shaped so an automated scorer could populate exactly the same ones later.
+- **A second opinion**: `skills/application-viability/` is a Claude Skill —
+  instructions, not code — that reads a transcript, an email thread, or an
+  application's context and returns its own 0–100 score with a one-line
+  reason, in the shape the score fields expect. It's deliberately *not* part
+  of the app: it runs in a chat session you start, on material you hand it,
+  so the deployed server keeps zero LLM dependencies and no transcript goes
+  anywhere as a side effect of ordinary use. It's also written to ignore any
+  score you've already recorded — a second opinion that's read your first one
+  isn't one. See [`skills/README.md`](./skills/README.md) to install it.
 - **Editing**: every record type (companies, postings, resumes, applications,
   meetings, people, email threads) has an *Edit* link that opens a form
   pre-filled with its current values — available both from each list/board

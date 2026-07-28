@@ -57,6 +57,22 @@
         <label>Applied date</label>
         <input name="applied_date" type="datetime-local" value="{{ app_obj.applied_date.strftime('%Y-%m-%dT%H:%M') if app_obj.applied_date else '' }}">
       </div>
+      <div class="field">
+        <label>Source</label>
+        <select name="source">
+          <option value="">—</option>
+          {% for s in sources %}
+          <option value="{{ s }}" {% if app_obj.source and app_obj.source.value==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="field" style="margin-top:0.5rem">
+      <label>Context</label>
+      <textarea name="context" rows="4" placeholder="Why this role is worth pursuing, what you know about the team, comp, timeline, and what would make you walk.">{{ app_obj.context or '' }}</textarea>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0.25rem 0 0">
+        Standing context you'd re-read when judging whether this one is worth the effort. Notes below stay a running log of what happened lately.
+      </p>
     </div>
     <div class="field" style="margin-top:0.5rem">
       <label>Notes</label>
@@ -112,6 +128,21 @@
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     Meetings and email threads for this application, merged into one timeline, most recent first.
   </p>
+  {% if score_rollup %}
+  <div class="panel" style="margin-bottom:0.7rem;display:flex;align-items:baseline;gap:0.6rem;flex-wrap:wrap">
+    <span style="font-size:1.5rem;font-weight:650">{{ score_rollup.latest }}</span>
+    <span style="font-size:0.78rem;color:var(--muted)">win likelihood</span>
+    {% if score_rollup.delta is not none %}
+    <span class="pill {% if score_rollup.delta > 0 %}up{% elif score_rollup.delta < 0 %}down{% endif %}">
+      {% if score_rollup.delta > 0 %}▲ +{{ score_rollup.delta }}{% elif score_rollup.delta < 0 %}▼ {{ score_rollup.delta }}{% else %}flat{% endif %}
+      from {{ score_rollup.previous }}
+    </span>
+    {% endif %}
+    <span style="font-size:0.74rem;color:var(--neutral);margin-left:auto">
+      latest of {{ score_rollup.count }} scored {% if score_rollup.count == 1 %}activity{% else %}activities{% endif %}
+    </span>
+  </div>
+  {% endif %}
   {% if activity %}
   <div class="panel" style="padding:0">
     {% for row in activity %}
@@ -122,7 +153,10 @@
           <a href="{{ row.url }}"><strong>{{ row.title }}</strong></a>
           {% if row.sub %}<span style="font-size:0.78rem;color:var(--muted)"> — {{ row.sub }}</span>{% endif %}
         </div>
-        {% if row.when %}<span style="font-size:0.78rem;color:var(--muted);white-space:nowrap">{{ row.when.strftime("%b %d, %Y") }}</span>{% endif %}
+        <span style="display:flex;gap:0.5rem;align-items:center;white-space:nowrap">
+          {% if row.score is not none %}<span class="tag" title="Win-likelihood score">{{ row.score }}</span>{% endif %}
+          {% if row.when %}<span style="font-size:0.78rem;color:var(--muted)">{{ row.when.strftime("%b %d, %Y") }}</span>{% endif %}
+        </span>
       </div>
     </div>
     {% endfor %}

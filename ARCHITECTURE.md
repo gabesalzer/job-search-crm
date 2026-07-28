@@ -128,9 +128,17 @@ History only ever reflects real pipeline movement.
   Takehome"). Pair `stage` with a `lost_reason` picklist (ghosted, rejected
   after screen, rejected after onsite, declined by me, …) — that's the field that
   answers *where and why* you fall off.
+- **Per-interaction — calibration.** Every Meeting and Email Thread can carry a
+  0–100 win-likelihood score with a reason and a timestamp. Because each one is
+  attached to an application that eventually reaches a terminal stage, these
+  become judgments you can check against outcomes — "was I overconfident after
+  recruiter screens?" is answerable, not a feeling. See "Win-likelihood
+  scoring" below.
 - **Analysis questions the model supports:** which resume versions progress; which
   JD/company types you gain traction with; whether a particular resume moves you
-  forward; whether you have a "champion"; and, because Person's company is
+  forward; whether you have a "champion"; which origin (`source`: referral vs.
+  recruiter inbound vs. outbound) actually converts, and how much cheaper the
+  ones that do are to run; and, because Person's company is
   independent, "which recruiters (regardless of agency) get me furthest" as its
   own question separate from "which employers."
 
@@ -339,12 +347,135 @@ than two separate lists you'd have to mentally interleave. This is a
 display-layer merge only — no new table, no schema change: the route
 handler (`_activity_timeline()` in `app/routers/ui.py`) fetches both
 relationships, normalizes each row into a common `{type, when, title, sub,
-url}` shape, and sorts by whichever timestamp best represents "most recent
+url, score}` shape, and sorts by whichever timestamp best represents "most recent
 activity" for that row type (`meeting_date` for a Meeting, `last_message_at`
 for a thread, so a thread with a fresh reply surfaces near the top rather
 than staying pinned at when it started). Salesforce's own Activity Timeline
 works the same way under the hood — Tasks and Events are different objects
 with different fields, merged and sorted at the UI layer, not in the schema.
+
+## Win-likelihood scoring
+
+Meeting and Email Thread each carry the same three nullable columns: `score`
+(0–100), `score_reason`, and `scored_at`. The score answers one question —
+*given what just happened in this interaction, how likely is this application
+to end up Closed Won?*
+
+### Why the score lives on the activity, not the Application
+
+The obvious place to put a win-likelihood number is on the Application, next
+to `stage`. That was rejected on purpose. A single field on the Application
+can only ever tell you where you stand **right now**; the same judgments
+recorded against each interaction turn into a time series, and the series is
+where the information actually is. A 55 on its own says almost nothing. A 55
+that was 80 last week says the pursuit is cooling and you should do something
+about it this week — and that's visible only if the earlier reading survived
+instead of being overwritten.
+
+This is the same reason Stage History exists as an append-only child rather
+than as a "previous stage" column on the Application. Both are the choice to
+keep the history rather than the latest value.
+
+The Application's own number is therefore **derived at display time**
+(`_score_rollup()` in `app/routers/ui.py`) rather than stored: latest reading,
+the change from the one before it, and how many readings back it. Nothing to
+keep in sync, no backfill when you rescore something, and no possibility of a
+stored rollup quietly disagreeing with the rows it summarizes.
+
+### Why `scored_at` is separate from the activity's own date
+
+You often score a meeting days after it happened — after the follow-up email
+lands, or doesn't. `meeting_date` records when you talked; `scored_at` records
+when you formed the judgment. The rollup orders by `scored_at` (falling back
+to the activity's own date when it's unset), so a three-week-old meeting you
+scored yesterday correctly lands *last* in the series: it reflects your most
+recent thinking even though the conversation itself is the oldest.
+
+Keeping the two apart also makes calibration analysis possible later. "Was I
+overconfident at the recruiter-screen stage?" needs to know what you believed
+**at the time you believed it**, which a single conflated date can't tell you.
+
+### Nothing writes the score automatically — yet
+
+Today you enter the number by hand. That's a deliberate stopping point, not an
+unfinished feature: the alternative is shipping interview transcripts to a
+third-party API, and those transcripts contain other people who never agreed
+to that. Same reasoning as the manual-paste choice for email ingestion.
+
+The three columns are shaped so an automated scorer could populate exactly
+these fields later with no schema change and no backfill — `score_reason` is
+where a model's rationale would go, the same place yours does now. And because
+every scored activity hangs off an application that eventually reaches a
+terminal stage, the readings accumulate into labeled training data as a side
+effect of ordinary use: a judgment, its rationale, when it was made, and how
+it actually turned out.
+
+### The second opinion lives outside the app, on purpose
+
+`skills/application-viability/` is a Claude Skill — a folder of instructions,
+not code, and not wired into anything the server runs. Invoked in a chat
+session, it reads a transcript, an email thread, or an application's context
+and returns an independent score plus a one-line rationale, shaped to be
+transcribed into the same two fields you'd fill in by hand.
+
+That boundary is the whole design. The privacy objection above is about the
+*app* silently shipping every imported Granola note to a third-party API as a
+routine side effect of ordinary use. It is not an objection to ever forming a
+model-assisted view of a conversation. Moving that step into a session the
+user explicitly starts, with material they explicitly hand over, keeps the
+deployed product free of any LLM dependency — there is still no `anthropic` or
+`openai` package in `requirements.txt` — while leaving the useful part
+available. The app stays a system of record; the judgment happens somewhere
+you can see it happening.
+
+The skill is also written to be *blinded* to whatever score is already on the
+record. A second opinion that has read your first one isn't one.
+
+### Where the 0–100 range is actually enforced
+
+At the application layer only — `_parse_score()` clamps to 0–100 and treats
+non-numeric input as unscored. There's no CHECK constraint behind the column,
+because `ensure_schema()` only ever issues `ALTER TABLE ADD COLUMN` and has no
+way to add a constraint to an existing table (SQLite would need a full table
+rebuild). Guarding at the single door that writes the column keeps the
+invariant real without inventing a migration path this project doesn't have.
+`tests/test_scoring.py` is what holds that guarantee down.
+
+One distinction the code takes care with throughout: **blank is not zero.**
+Blank means no judgment has been formed; `0` means you think it's dead. Both
+are falsy in Python, so every check uses `is not None` rather than
+truthiness — otherwise a "this is over" score would silently disappear from
+the timeline and the rollup.
+
+## Context vs. notes on an Application
+
+`JobApplication` carries two free-text fields, and the split is intentional:
+
+- **`context`** is durable input you'd re-read when judging whether this one
+  is worth continuing to spend effort on — why the role is interesting, what
+  you know about the team, comp, and timeline, what would make you walk.
+- **`notes`** stays a running scratchpad of whatever happened lately.
+
+Merging them would be simpler, and worse. The point of `context` is that a
+viability assessment (yours, or an automated one later) has a stable thing to
+read instead of having to sift a chronological log for the handful of durable
+facts buried in it. Chronological notes are append-mostly and grow without
+bound; context is edited in place and stays roughly the same size.
+
+## Where an application came from
+
+`source` is a nullable picklist — **Referral**, **Recruiter Inbound**, or
+**Outbound** — about the *origin* of the application, not about who a person
+is. A referral from a friend and an inbound note from that friend's in-house
+recruiter are different sources even when both eventually route through the
+same recruiter, because they convert differently and you can act on them
+differently.
+
+It's nullable and defaults to nothing, deliberately. Applications created
+before the field existed genuinely don't know their own answer, and defaulting
+them to "Outbound" would put fabricated data into the exact analysis the field
+exists to support ("which source actually converts?"). An honest blank is
+worth more than a confident guess.
 
 ## Ingestion & dedup (roadmap)
 
