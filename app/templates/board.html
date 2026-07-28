@@ -87,9 +87,19 @@
           {% endif %}
           {% if roll.stale_days is not none %}
           <span class="age {% if roll.stale_days >= 14 %}stale{% endif %}"
-                title="Days since this reading was taken">
+                title="Days since the meeting or email this reading came from">
             {% if roll.stale_days == 0 %}today{% else %}{{ roll.stale_days }}d ago{% endif %}
           </span>
+          {% endif %}
+        </div>
+        {% endif %}
+        {% set fc = forecasts.get(app.id) if forecasts else None %}
+        {% if fc %}
+        <div class="metarow">
+          <span class="fc fc-{{ fc.category|lower|replace(' ','-') }}"
+                title="Automated Forecast — {{ fc.reason }} ({{ fc.confidence }} evidence)">{{ fc.category }}</span>
+          {% if app.manual_forecast and app.manual_forecast.value != fc.category %}
+          <span class="fc fc-manual" title="Your manual forecast, which disagrees with the automated one">≠ {{ app.manual_forecast.value }}</span>
           {% endif %}
         </div>
         {% endif %}

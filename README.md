@@ -120,6 +120,25 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   they're different answers, and the app keeps them apart. Nothing fills
   these in automatically today: you enter the number, and the fields are
   shaped so an automated scorer could populate exactly the same ones later.
+- **Forecast**: every application carries two forecasts, side by side and
+  deliberately independent. **Manual Forecast** is a picklist — Pipeline,
+  Best Case, Commit, Closed — that only you write; nothing in the app ever
+  overwrites it. **Automated Forecast** derives the same three categories
+  from four inputs: how far the pursuit has got (stage), the quality of the
+  most recent scored meeting, how closely the resume and the job description
+  overlap, and where the application came from (a referral is worth a great
+  deal more than an outbound application). The weights sum to 100, so the
+  total reads as a rough percentage and *Commit* means what it says: more
+  likely than not, 75 or above. Meetings feed this through two new 0–100
+  fields — **my performance** and **their engagement** — kept separate
+  because a strong performance met with flat engagement means something very
+  different from the reverse. The automated read is computed fresh on every
+  page load and stored nowhere, so it can never be quietly stale, and it
+  reports its own confidence alongside the category, because "Pipeline, I
+  have nothing to go on" and "Pipeline, I have plenty to go on and it's bad"
+  are the same word and different situations. The board flags any card where
+  your call and the arithmetic disagree; the edit page shows the full
+  four-part breakdown behind the number.
 - **A second opinion**: `skills/application-viability/` is a Claude Skill —
   instructions, not code — that reads a transcript, an email thread, or an
   application's context and returns its own 0–100 score with a one-line

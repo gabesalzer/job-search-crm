@@ -46,6 +46,28 @@ reaches a terminal stage, these scores accumulate into labeled training data
 for free: "when I scored 70 after a hiring-manager call, how often did that
 actually close?" is answerable from `score` + `Stage`, and is the reason the
 reason-text is captured rather than the bare number.
+
+A Meeting additionally carries `my_performance` and `employer_engagement`,
+which decompose the blended `score` into its two independent causes: how well
+you did, and how interested they are. They are separate columns rather than a
+single "quality" number because they move independently and the difference is
+the actionable part. A great performance met with flat engagement means the
+role is probably going elsewhere and you should stop spending here; a
+mediocre performance met with high engagement means you're still in it and
+the fix is yours to make. Averaged into one number, both read as "medium" and
+tell you nothing. All three stay nullable and independent -- scoring one does
+not require scoring the others, and blank continues to mean "no judgment
+formed" rather than zero.
+
+Forecast
+--------
+An Application carries a `manual_forecast` you maintain by hand. Its
+automated counterpart is *not* a column: it's derived at display time in
+app/forecast.py from stage, source, meeting quality, and resume/JD fit, for
+the same reason the score rollup isn't stored -- a stored forecast is a
+snapshot that silently goes stale the moment any input under it moves. Two
+independent reads that can visibly disagree is the point; a disagreement is
+information, and it vanishes if the machine can overwrite your column.
 """
 from __future__ import annotations
 
@@ -183,6 +205,35 @@ class ApplicationSource(str, enum.Enum):
     OUTBOUND = "Outbound"
 
 
+class ForecastCategory(str, enum.Enum):
+    """How likely this application is to end in an offer you accept.
+
+    Borrowed straight from Salesforce forecast categories, and used by both
+    the hand-maintained `manual_forecast` column and the derived Automated
+    Forecast in app/forecast.py, so the two are always in the same units and
+    can be read side by side.
+
+      * Commit    -- more likely than not. Roughly 75%+.
+      * Best Case -- possible if a few things break your way.
+      * Pipeline  -- no signal; not forecastable. This is the residual bucket
+                     and deliberately absorbs two different situations: "there
+                     isn't enough evidence yet" and "there is evidence and
+                     it's weak." Salesforce's separate `Omitted` category
+                     lives in here too -- a role you're keeping warm but have
+                     written off is, for forecasting purposes, exactly a role
+                     you aren't counting.
+      * Closed    -- decided, win or lose. Only selectable by hand; the
+                     Automated Forecast never emits it, because Stage already
+                     carries Closed Won / Closed Lost and a second source of
+                     truth for "is this over" is a bug waiting to happen.
+    """
+
+    PIPELINE = "Pipeline"
+    BEST_CASE = "Best Case"
+    COMMIT = "Commit"
+    CLOSED = "Closed"
+
+
 # --------------------------------------------------------------------------- #
 # Company  (== Account)
 # --------------------------------------------------------------------------- #
@@ -303,6 +354,18 @@ class JobApplication(Base):
 
     # How the application originated (see ApplicationSource). Nullable.
     source = Column(Enum(ApplicationSource), index=True)
+
+    # Your own call on where this lands (see ForecastCategory). Defaults to
+    # Pipeline, which is honest here in a way a default stage never was: the
+    # category literally means "no signal / not forecastable", so a record
+    # born there is making a true statement about itself rather than a
+    # flattering guess. The cost is that this column can't distinguish "I
+    # looked and judged it Pipeline" from "I never touched it" -- if that
+    # distinction starts mattering, the fix is a `manual_forecast_set_at`
+    # timestamp, not a nullable default.
+    manual_forecast = Column(
+        Enum(ForecastCategory), default=ForecastCategory.PIPELINE, index=True
+    )
 
     # Standing context on the opportunity itself: why this role is worth
     # pursuing, what you know about the team/comp/timeline, what would make you
@@ -462,6 +525,23 @@ class Meeting(Base):
     score = Column(Integer)             # 0-100, nullable = not scored
     score_reason = Column(Text)         # why you landed on that number
     scored_at = Column(DateTime)        # when the reading was taken
+
+    # --- The two causes underneath that blended score ---
+    #
+    # Kept apart because they answer different questions and only one of them
+    # is yours to fix. `score` says where the pursuit stands; these say why.
+    # Both are 0-100 and nullable, and blank means "didn't judge it", not 0 --
+    # the same rule `score` follows. Neither is required to set the other, and
+    # nothing derives one from the other, because a call can genuinely go
+    # (my_performance 80, employer_engagement 20) or the reverse, and
+    # collapsing that into one axis destroys exactly the signal worth having.
+    #
+    # No `*_at` timestamps on these: they are attributes of the meeting, read
+    # at the meeting's own date. `scored_at` exists only because score
+    # calibration later needs to know when a judgment was formed, and these
+    # two aren't fed into that analysis.
+    my_performance = Column(Integer)        # 0-100: how well I did
+    employer_engagement = Column(Integer)   # 0-100: how interested they were
 
     granola_note_id = Column(String(255), index=True)  # for linking / de-dup
     granola_link = Column(String(1024))

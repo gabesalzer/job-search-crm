@@ -52,7 +52,20 @@
         <input name="score" type="number" min="0" max="100" step="1" placeholder="blank if not scored">
       </div>
       <div class="field"><label>Why (optional)</label><input name="score_reason" placeholder="what moved the number"></div>
+      <div class="field">
+        <label>My performance (0–100, optional)</label>
+        <input name="my_performance" type="number" min="0" max="100" step="1" placeholder="blank if not judged">
+      </div>
+      <div class="field">
+        <label>Their engagement (0–100, optional)</label>
+        <input name="employer_engagement" type="number" min="0" max="100" step="1" placeholder="blank if not judged">
+      </div>
     </div>
+    <p style="font-size:0.74rem;color:var(--neutral);margin:0.4rem 0 0">
+      The last two split the score into its causes — how you did, and how interested they were — and feed the
+      Automated Forecast. Keeping them apart is the point: a strong performance met with flat engagement means
+      something very different from the reverse, and averaging them hides exactly that.
+    </p>
     <div style="margin-top:0.6rem"><button class="btn" type="submit">Add meeting</button></div>
   </form>
   {% else %}
@@ -68,6 +81,8 @@
       <strong>{{ m.title or "Untitled meeting" }}</strong>
       <span style="display:flex;gap:0.35rem;align-items:center;white-space:nowrap">
         {% if m.score is not none %}<span class="pill" title="Win-likelihood score{% if m.score_reason %}: {{ m.score_reason }}{% endif %}">{{ m.score }}</span>{% endif %}
+        {% if m.my_performance is not none %}<span class="pill" title="How well I did">me {{ m.my_performance }}</span>{% endif %}
+        {% if m.employer_engagement is not none %}<span class="pill" title="How engaged they were">them {{ m.employer_engagement }}</span>{% endif %}
         {% if m.meeting_type %}<span class="pill">{{ m.meeting_type.value }}</span>{% endif %}
       </span>
     </div>

@@ -15,10 +15,15 @@ code:
    column. If that clamp is wrong, nothing downstream catches it.
 
 2. The rollup is derived at display time from a *mixed* set of activities --
-   meetings and threads, each falling back to a different date field, and
+   meetings and threads, each reaching for a different date field, and
    `scored_at` stamped in UTC while form-entered dates come back naive.
    Getting the ordering wrong silently reports the wrong trend rather than
-   raising, which is the kind of bug that survives a long time.
+   raising, which is the kind of bug that survives a long time. It did: the
+   rollup shipped sorting on `scored_at` first, which ordered the whole series
+   by when rows were typed in, and it took a card visibly disagreeing with the
+   activity list rendered directly beneath it to surface. The ordering and
+   staleness tests below assert the corrected behaviour and are deliberately
+   worded to say what the old ones got wrong.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -82,7 +87,7 @@ def score_rollup(activities, now=None):
     deterministic; the real one reads the clock.
     """
     scored = [
-        (_sortable(a.scored_at or a.when), a.score)
+        (_sortable(a.when or a.scored_at), a.score)
         for a in activities
         if a.score is not None
     ]
@@ -233,23 +238,46 @@ def test_single_score_has_no_delta():
     }
 
 
-def test_latest_and_delta_follow_scored_at_not_the_activity_date():
-    """The point of a separate `scored_at`: a meeting from three weeks ago
-    that you scored yesterday reflects your most recent thinking, and has to
-    land last in the series even though its own date is oldest."""
+def test_latest_and_delta_follow_the_event_date_not_when_it_was_scored():
+    """The bug this replaced a test for: the rollup used to sort on `scored_at`
+    first, so logging two meetings in one sitting -- oldest typed in last --
+    made the older conversation the "latest" reading. Since `_apply_score` is
+    the only writer of `score` anywhere in the app, every scored row has a
+    `scored_at`, and the intended `or when` fallback could never fire; the whole
+    series was ordered by data entry.
+
+    A score is a judgment *about* an event and belongs where the event sits.
+    Here the three-week-old meeting was typed in a day later than the thread,
+    and must still land *before* it.
+    """
     old_meeting_scored_late = Activity(
         when=JULY - timedelta(days=21), score=30, scored_at=JULY + timedelta(days=1)
     )
     recent_thread = Activity(when=JULY, score=80, scored_at=JULY)
     roll = score_rollup([old_meeting_scored_late, recent_thread])
-    assert roll["latest"] == 30
-    assert roll["previous"] == 80
-    assert roll["delta"] == -50
+    assert roll["latest"] == 80
+    assert roll["previous"] == 30
+    assert roll["delta"] == 50
 
 
-def test_falls_back_to_the_activity_date_when_unstamped():
-    a = Activity(when=JULY - timedelta(days=5), score=20, scored_at=None)
-    b = Activity(when=JULY, score=60, scored_at=None)
+def test_entry_order_cannot_reorder_the_series():
+    """Same claim from the other direction: hold the event dates fixed, vary
+    only when each was typed in, and nothing about the rollup may move."""
+    a = Activity(when=JULY - timedelta(days=5), score=20, scored_at=JULY)
+    b = Activity(when=JULY, score=60, scored_at=JULY + timedelta(days=9))
+    typed_in_reverse = [
+        Activity(when=JULY - timedelta(days=5), score=20, scored_at=JULY + timedelta(days=9)),
+        Activity(when=JULY, score=60, scored_at=JULY),
+    ]
+    assert score_rollup([a, b])["delta"] == score_rollup(typed_in_reverse)["delta"] == 40
+
+
+def test_falls_back_to_scored_at_when_the_activity_has_no_date_of_its_own():
+    """The fallback now runs the other way, and unlike the old one it can
+    actually fire: an activity with no date of its own is ordered by when you
+    scored it, which is the only date it has."""
+    a = Activity(when=None, score=20, scored_at=JULY - timedelta(days=5))
+    b = Activity(when=None, score=60, scored_at=JULY)
     roll = score_rollup([b, a])  # deliberately out of order
     assert roll["latest"] == 60
     assert roll["delta"] == 40
@@ -328,14 +356,23 @@ def test_stale_days_measures_the_latest_reading_not_the_oldest():
     assert roll["stale_days"] == 3
 
 
-def test_stale_days_follows_scored_at_not_the_meeting_date():
-    """A meeting from a month ago that you scored yesterday is a day-old
-    judgment, not a month-old one -- the age tracks when you formed the view."""
+def test_stale_days_measures_the_event_not_the_keystroke():
+    """This used to assert the opposite, and the opposite was the wrong claim.
+    A meeting from a month ago that you typed in yesterday is not a day-old
+    situation -- nothing has happened on that pursuit in thirty-one days, and
+    that silence is the thing worth acting on. Measuring from `scored_at` let
+    a card go quiet for a month and still read "1d ago" because you'd tidied up
+    your data entry.
+
+    It follows the sort key deliberately: the age describes the reading the
+    rollup selected, so if the two used different dates the card could report an
+    age belonging to a different activity than the number above it.
+    """
     roll = score_rollup(
         [Activity(when=JULY - timedelta(days=30), score=55, scored_at=JULY)],
         now=JULY + timedelta(days=1),
     )
-    assert roll["stale_days"] == 1
+    assert roll["stale_days"] == 31
 
 
 def test_undated_reading_reports_no_age_rather_than_a_huge_one():

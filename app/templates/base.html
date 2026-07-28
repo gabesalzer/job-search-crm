@@ -64,6 +64,18 @@
   .pill.up{color:var(--up);border-color:#bfe6c9;background:#f0faf3}
   .pill.down{color:var(--down);border-color:#f2c9c9;background:#fdf1f1}
   .tag{font-size:0.7rem;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:0.04rem 0.4rem}
+  /* Forecast badge. Deliberately not a traffic light: Pipeline is the residual
+     bucket, not a failure, and colouring it red would make "no signal yet" read
+     as bad news on every application's first day. Commit gets the only strong
+     colour, because it's the only one making a strong claim. */
+  .fc{display:inline-block;font-size:0.7rem;font-weight:600;letter-spacing:0.01em;
+    padding:0.1rem 0.45rem;border-radius:6px;border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap}
+  .fc-commit{color:var(--up);border-color:#bfe6c9;background:#f0faf3}
+  .fc-best-case{color:#8a5a00;border-color:#f0dcb4;background:#fdf8ee}
+  .fc-pipeline{color:var(--muted);background:#f7f7f8}
+  .fc-closed{color:var(--neutral);background:#f7f7f8}
+  .fc-manual{color:var(--muted);background:#fff;border-style:dashed}
   .rating-row{display:flex;gap:0.35rem;margin-top:0.6rem;align-items:center}
   .ratebtn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:0.28rem 0.55rem;
     cursor:pointer;font-size:0.9rem;line-height:1;font-family:inherit}

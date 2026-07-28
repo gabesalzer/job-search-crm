@@ -77,6 +77,27 @@
         After this meeting, how likely is this application to end up Closed Won? Blank means unscored — leave it blank rather than guessing, since these readings are meant to be checkable against the eventual outcome.
         {% if meeting.scored_at %}<br>Last scored {{ meeting.scored_at.strftime("%b %d, %Y") }}.{% endif %}
       </p>
+      <div class="form-grid" style="margin-top:0.7rem">
+        <div class="field">
+          <label>My performance (0–100)</label>
+          <input name="my_performance" type="number" min="0" max="100" step="1"
+                 value="{{ meeting.my_performance if meeting.my_performance is not none else '' }}"
+                 placeholder="blank if not judged">
+        </div>
+        <div class="field">
+          <label>Their engagement (0–100)</label>
+          <input name="employer_engagement" type="number" min="0" max="100" step="1"
+                 value="{{ meeting.employer_engagement if meeting.employer_engagement is not none else '' }}"
+                 placeholder="blank if not judged">
+        </div>
+      </div>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0.3rem 0 0">
+        These two split the score above into its causes, and they feed the Automated Forecast.
+        They're separate because they move independently and the gap between them is the part you can act on:
+        a strong performance met with flat engagement usually means the role is going elsewhere,
+        while a shaky performance met with high engagement means you're still in it and the fix is yours.
+        Averaged into one number both read “medium” and tell you nothing.
+      </p>
     </div>
     <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
       <button class="btn" type="submit">Save changes</button>

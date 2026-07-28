@@ -62,6 +62,18 @@
           {% endfor %}
         </select>
       </div>
+      <div class="field">
+        <label>Manual forecast</label>
+        <select name="manual_forecast">
+          <option value="">—</option>
+          {% for f in forecast_values %}
+          <option value="{{ f }}" {% if app_obj.manual_forecast and app_obj.manual_forecast.value==f %}selected{% endif %}>{{ f }}</option>
+          {% endfor %}
+        </select>
+        <p style="font-size:0.7rem;color:var(--neutral);margin:0.2rem 0 0">
+          Your call. Nothing else writes this — the automated read below never overwrites it.
+        </p>
+      </div>
     </div>
     <div style="margin-top:0.9rem;padding-top:0.8rem;border-top:1px solid var(--line)">
       <h3 style="font-size:0.86rem;margin:0 0 0.15rem">Dates</h3>
@@ -116,6 +128,64 @@
 </div>
 
 <div style="max-width:720px;margin-top:1.4rem">
+  <h2 style="font-size:1rem;margin:0 0 0.4rem">Forecast</h2>
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
+    Two independent reads. The one above is yours and is stored; this one is computed fresh on every page load
+    from stage, source, meeting quality, and resume/JD overlap, and is stored nowhere — a saved forecast is a
+    snapshot that goes stale the moment anything under it moves, and a stale forecast looks exactly like a fresh one.
+    Where the two disagree is the useful part, so neither is allowed to overwrite the other.
+  </p>
+  <div class="panel">
+    <div style="display:flex;align-items:baseline;gap:0.6rem;flex-wrap:wrap">
+      <span class="fc fc-{{ forecast.category|lower|replace(' ','-') }}">{{ forecast.category }}</span>
+      <span style="font-size:0.78rem;color:var(--muted)">automated · {{ forecast.total }}/100</span>
+      <span class="pill" title="How many of the four inputs actually had data behind them. A Pipeline meaning “nothing to go on” and a Pipeline meaning “plenty to go on and it's bad” are the same category and different situations.">{{ forecast.confidence }} evidence</span>
+      <span style="font-size:0.78rem;color:var(--muted);margin-left:auto">
+        manual:
+        {% if app_obj.manual_forecast %}
+        <span class="fc fc-{{ app_obj.manual_forecast.value|lower|replace(' ','-') }}">{{ app_obj.manual_forecast.value }}</span>
+        {% else %}<span style="color:var(--neutral)">not set</span>{% endif %}
+      </span>
+    </div>
+    <p style="font-size:0.82rem;margin:0.5rem 0 0">{{ forecast.reason }}</p>
+    {% if app_obj.manual_forecast and app_obj.manual_forecast.value != forecast.category %}
+    <p style="font-size:0.76rem;color:var(--muted);margin:0.45rem 0 0">
+      These two disagree. That isn't an error to reconcile — you can see things the four inputs can't, and the
+      inputs can catch a pursuit you're attached to. Worth knowing which of you is right, later.
+    </p>
+    {% endif %}
+    <div style="margin-top:0.7rem;padding-top:0.6rem;border-top:1px solid var(--line)">
+      <div style="display:flex;gap:1.1rem;flex-wrap:wrap;font-size:0.78rem">
+        {% for label, pts, max_pts, note in [
+          ("Stage", forecast.components.stage, 30, "How far the pursuit has actually gotten."),
+          ("Meetings", forecast.components.meetings, 35, "Their engagement weighted over your performance, from the most recent scored meeting, plus a little for depth."),
+          ("Fit", forecast.components.fit, 20, "Vocabulary overlap between the resume and the JD. Smallest weight on purpose — it measures whether the two documents talk about the same things, not whether you can do the job."),
+          ("Source", forecast.components.source, 15, "Referral, recruiter inbound, or outbound."),
+        ] %}
+        <span title="{{ note }}">
+          <strong>{{ label }}</strong>
+          <span style="color:var(--muted)">{{ pts }}/{{ max_pts }}</span>
+        </span>
+        {% endfor %}
+      </div>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0.5rem 0 0">
+        {% if forecast.components.quality is not none %}
+          Meeting quality {{ forecast.components.quality }} from {{ forecast.components.scored_meetings }}
+          scored {% if forecast.components.scored_meetings == 1 %}meeting{% else %}meetings{% endif %}.
+        {% else %}
+          No meeting has a performance or engagement rating yet — add them on a meeting to give this something to read.
+        {% endif %}
+        {% if forecast.components.fit_band %}
+          Resume/JD overlap {{ forecast.components.fit_band }} ({{ forecast.components.fit_index }}).
+        {% else %}
+          No resume and posting text to compare.
+        {% endif %}
+      </p>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:720px;margin-top:1.4rem">
   <h2 style="font-size:1rem;margin:0 0 0.4rem">Stage history <span style="color:var(--neutral);font-weight:400">({{ app_obj.stage_history|length }})</span></h2>
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     Each row is when a stage change was logged in the app, which is often later than when it actually happened.
@@ -163,8 +233,8 @@
     {% endif %}
     {% if score_rollup.stale_days is not none %}
     <span class="pill" style="{% if score_rollup.stale_days >= 14 %}color:var(--down);border-color:#f2c9c9{% endif %}"
-          title="Days since this reading was taken">
-      {% if score_rollup.stale_days == 0 %}scored today{% else %}{{ score_rollup.stale_days }}d old{% endif %}
+          title="Days since the meeting or email this reading came from — not since you typed the number in">
+      {% if score_rollup.stale_days == 0 %}today{% else %}{{ score_rollup.stale_days }}d ago{% endif %}
     </span>
     {% endif %}
     <span style="font-size:0.74rem;color:var(--neutral);margin-left:auto">

@@ -17,6 +17,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, selectinload
 
+from .. import forecast as forecast_model
 from .. import models
 from ..database import get_db
 from ..services import granola
@@ -35,6 +36,7 @@ COMPANY_TYPES = [t.value for t in models.CompanyType]
 LOST_REASON_VALUES = [r.value for r in models.LostReason]
 PERSON_ROLE_VALUES = [r.value for r in models.PersonRole]
 APPLICATION_SOURCE_VALUES = [s.value for s in models.ApplicationSource]
+FORECAST_VALUES = [f.value for f in models.ForecastCategory]
 
 
 def _get_or_404(db: Session, model, obj_id: int):
@@ -97,6 +99,25 @@ def _apply_score(obj, raw_score: Optional[str], reason: str) -> None:
     obj.score_reason = (reason or "").strip() or None
 
 
+def _apply_meeting_quality(meeting, my_performance: str, employer_engagement: str) -> None:
+    """Write the two halves of meeting quality: how well you did, and how
+    interested they were.
+
+    Reuses _parse_score because these share its scale and its rules exactly --
+    0-100, clamped rather than rejected, blank meaning "no judgment formed"
+    rather than zero. That last distinction is the whole reason these aren't
+    defaulted: a call where you didn't rate your own performance and a call you
+    rated 0 are opposite claims, and the forecast reads them as such.
+
+    Unlike `score` these carry no `*_at` stamp. `scored_at` exists because the
+    rollup has to order readings against each other over time; these two are
+    read only off the most recent meeting, which is already ordered by
+    `meeting_date`. A timestamp nobody reads is a column that can only rot.
+    """
+    meeting.my_performance = _parse_score(my_performance)
+    meeting.employer_engagement = _parse_score(employer_engagement)
+
+
 def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
     """Derive "where does this application stand" from its scored activities.
 
@@ -105,20 +126,30 @@ def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
     never disagree with the rows it summarizes -- rescore a meeting and the
     application's number moves on the next page load, with no backfill.
 
-    Ordering uses `scored_at` (when you formed the judgment) and falls back to
-    the activity's own date, because a score entered days later still belongs
-    at the point in the sequence where you made the call. `latest` is the most
-    recent reading; `delta` is the change from the one before it, which is the
-    part that actually carries information -- a 55 on its own says little, a
-    55 that was 80 last week says the pursuit is cooling.
+    Ordering uses the date the activity *happened* -- `meeting_date` for a
+    meeting, `last_message_at` (then `started_at`) for a thread -- and falls
+    back to `scored_at` only when the activity carries no date of its own.
+
+    This used to sort on `scored_at` first, and that was wrong. `scored_at` is
+    stamped by _set_score() the instant a number is saved, and since _set_score
+    is the only writer of `score` anywhere in the app, every scored activity
+    has one; the `or meeting_date` fallback could never fire. The rollup was
+    therefore ordered entirely by data-entry time. Log two meetings in one
+    sitting, oldest last, and the older conversation became "latest" -- while
+    the activity list rendered directly beneath it on the same page sorted by
+    the real dates and visibly disagreed. A score is a judgment *about* an
+    event, and it belongs in the sequence where the event sits; when you formed
+    it is a fact about your evening, not about the pursuit.
 
     `stale_days` is how old that latest reading is, and it's there because a
     number with no age on it lies by omission: an 80 from six weeks ago and an
     80 from yesterday are the same digits describing completely different
     situations. That matters most on the board, where a column of them gets
     scanned at once and the confident-looking old one is exactly the card that
-    misleads. It's None when the latest reading has no usable date at all,
-    which is a different claim from "scored today".
+    misleads. Following the sort key, it now measures from the event rather
+    than from the keystroke -- "nothing has happened here in 21 days" is the
+    thing worth acting on. It's None when the latest reading has no usable date
+    at all, which is a different claim from "today".
 
     Returns None when nothing has been scored, so the template can stay quiet
     instead of rendering an empty widget.
@@ -136,11 +167,11 @@ def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
     scored: list[tuple[datetime, int]] = []
     for m in app_obj.meetings:
         if m.score is not None:
-            scored.append((_sortable(m.scored_at or m.meeting_date), m.score))
+            scored.append((_sortable(m.meeting_date or m.scored_at), m.score))
     for t in app_obj.email_threads:
         if t.score is not None:
             scored.append((
-                _sortable(t.scored_at or t.last_message_at or t.started_at),
+                _sortable(t.last_message_at or t.started_at or t.scored_at),
                 t.score,
             ))
     if not scored:
@@ -164,6 +195,35 @@ def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
     }
 
 
+def _forecast_for(app_obj: models.JobApplication) -> dict:
+    """Gather the four Automated Forecast inputs off an Application.
+
+    This is the only function in the app that knows both the ORM and the
+    forecast model, and it deliberately does nothing but read fields. All the
+    judgment lives in app/forecast.py, which imports no SQLAlchemy and is
+    therefore directly exercised by tests rather than mirrored in them.
+
+    Like the score rollup, this runs at display time and stores nothing. A
+    forecast column would be a snapshot that quietly rots the moment you rescore
+    a meeting or swap the resume, and the failure mode of a stale forecast is
+    the worst kind: it looks exactly like a fresh one.
+    """
+    return forecast_model.automated_forecast(
+        stage=app_obj.stage.value if app_obj.stage else None,
+        source=app_obj.source.value if app_obj.source else None,
+        meetings=[
+            {
+                "when": m.meeting_date,
+                "my_performance": m.my_performance,
+                "employer_engagement": m.employer_engagement,
+            }
+            for m in app_obj.meetings
+        ],
+        resume_text=app_obj.resume.content if app_obj.resume else None,
+        jd_text=app_obj.job_posting.jd_text if app_obj.job_posting else None,
+    )
+
+
 @router.get("/")
 def root():
     return RedirectResponse(url="/board")
@@ -174,14 +234,25 @@ def root():
 # --------------------------------------------------------------------------- #
 @router.get("/board")
 def board(request: Request, db: Session = Depends(get_db)):
-    # The score rollup reads every scored meeting and thread on each card, so
-    # load both up front. Without this the board issues two queries per
-    # application just to render the numbers.
+    # The score rollup reads every scored meeting and thread on each card, and
+    # the forecast additionally reads the resume and the posting. Load all four
+    # up front: without this the board issues four extra queries per application
+    # just to render the numbers, and that cost grows with the pipeline.
+    #
+    # Pulling full resume and JD text for a board view looks expensive. It
+    # mostly isn't -- selectinload issues one query per relationship for the
+    # whole page, not per card, and resumes are shared across applications so
+    # the distinct set is small. The fit index is recomputed per card on every
+    # load rather than cached, which is the same trade the score rollup makes:
+    # a derived number that can never be stale beats one that's cheap to read
+    # and quietly wrong.
     apps = (
         db.query(models.JobApplication)
         .options(
             selectinload(models.JobApplication.meetings),
             selectinload(models.JobApplication.email_threads),
+            selectinload(models.JobApplication.resume),
+            selectinload(models.JobApplication.job_posting),
         )
         .all()
     )
@@ -195,6 +266,11 @@ def board(request: Request, db: Session = Depends(get_db)):
         # Same derivation the Application page uses, keyed by id so a card can
         # look up its own without the template calling into Python.
         "rollups": {a.id: _score_rollup(a) for a in apps},
+        # Automated Forecast, same shape and same keying. The card shows only
+        # the category; the reasoning behind it lives on the edit page, because
+        # a board is for scanning and a four-part breakdown on every card would
+        # bury the one thing you came here to see.
+        "forecasts": {a.id: _forecast_for(a) for a in apps},
         # The board's stage picker defaults to the same stage the column does.
         # Leaving it on whatever happens to be first in the list would quietly
         # make Staging the default for every new record.
@@ -284,6 +360,12 @@ def edit_application_page(application_id: int, request: Request, db: Session = D
         .all(),
         "activity": _activity_timeline(app_obj),
         "score_rollup": _score_rollup(app_obj),
+        # The two forecasts, side by side and deliberately independent. The
+        # automated one is derived here and stored nowhere; the manual one is a
+        # column only you write. Where they disagree is the interesting part, so
+        # neither is allowed to overwrite or defer to the other.
+        "forecast": _forecast_for(app_obj),
+        "forecast_values": FORECAST_VALUES,
     })
 
 
@@ -303,6 +385,7 @@ def update_application_ui(
     notes: str = Form(""),
     context: str = Form(""),
     source: str = Form(""),
+    manual_forecast: str = Form(""),
     db: Session = Depends(get_db),
 ):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
@@ -317,6 +400,18 @@ def update_application_ui(
     # how this one started" and "this one was outbound" are different facts,
     # and collapsing them would quietly bias any later source-conversion read.
     app_obj.source = models.ApplicationSource(source) if source else None
+    # Your call, and only yours -- nothing else in the app writes this column.
+    # The Automated Forecast sits next to it on the page and is computed fresh
+    # on every render; it never reaches over and "corrects" this one, because a
+    # machine that silently agrees with itself has told you nothing.
+    #
+    # Blank clears to NULL rather than snapping back to the Pipeline default.
+    # New rows are born Pipeline (the column default), which is honest because
+    # the category literally means "no signal"; but if you deliberately empty
+    # the field, writing Pipeline back would be the app overruling you.
+    app_obj.manual_forecast = (
+        models.ForecastCategory(manual_forecast) if manual_forecast else None
+    )
 
     new_stage = models.Stage(stage)
     if new_stage != app_obj.stage:
@@ -854,6 +949,8 @@ def create_meeting_ui(
     granola_link: str = Form(""),
     score: str = Form(""),
     score_reason: str = Form(""),
+    my_performance: str = Form(""),
+    employer_engagement: str = Form(""),
     db: Session = Depends(get_db),
 ):
     meeting = models.Meeting(
@@ -868,6 +965,7 @@ def create_meeting_ui(
         granola_link=granola_link or None,
     )
     _apply_score(meeting, score, score_reason)
+    _apply_meeting_quality(meeting, my_performance, employer_engagement)
     db.add(meeting)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
@@ -899,6 +997,8 @@ def update_meeting_ui(
     granola_link: str = Form(""),
     score: str = Form(""),
     score_reason: str = Form(""),
+    my_performance: str = Form(""),
+    employer_engagement: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Update a meeting. This is also how you (re)attach a Granola transcript:
@@ -919,6 +1019,7 @@ def update_meeting_ui(
     meeting.granola_note_id = granola_note_id or None
     meeting.granola_link = granola_link or None
     _apply_score(meeting, score, score_reason)
+    _apply_meeting_quality(meeting, my_performance, employer_engagement)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
 

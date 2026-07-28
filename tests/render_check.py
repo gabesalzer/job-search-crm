@@ -47,6 +47,7 @@ app_obj = SimpleNamespace(
     created_at=datetime(2026, 6, 28, 9, 0), updated_at=datetime(2026, 7, 12, 16, 30),
     last_activity_date=datetime(2026, 7, 10, 15, 0),
     email_threads=[], context="Team is 4 people; comp band unclear.", source=enum("Referral"),
+    manual_forecast=enum("Best Case"),
     stage_history=[
         SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
         SimpleNamespace(id=11, from_stage=enum("Saved"), to_stage=enum("Applied"), changed_at=datetime(2026, 7, 1, 10, 0)),
@@ -59,6 +60,7 @@ meeting = SimpleNamespace(
     notes="", granola_note_id="abc123", granola_link="https://granola.ai/notes/abc123",
     application_id=4, application=app_obj,
     score=70, score_reason="Strong signal on scope", scored_at=datetime(2026, 7, 10, 18, 0),
+    my_performance=75, employer_engagement=80,
 )
 app_obj.meetings = [meeting]  # circular-ish, but fine for a render smoke test
 
@@ -93,6 +95,45 @@ activity = [
 # without importing the app package (which needs FastAPI/SQLAlchemy).
 score_rollup = {"latest": 70, "previous": 55, "delta": 15, "count": 2, "stale_days": 3}
 
+# Mirrors what forecast.automated_forecast() returns. Unlike the rollup, this
+# one *could* be produced by importing the real module (it's stdlib-only), but
+# it's kept as a literal for the same reason the rollup is: this file's job is
+# to prove the templates survive every shape they can be handed, including
+# shapes the model would only emit under conditions that are awkward to
+# construct. tests/test_forecast.py is where the values themselves are checked.
+forecast = {
+    "category": "Best Case", "total": 58, "confidence": "ok",
+    "reason": "Best Case: meeting quality 78 across 2 scored meetings, referral origin, strong resume/JD overlap.",
+    "components": {
+        "stage": 12.0, "meetings": 25.8, "fit": 6.2, "source": 15.0,
+        "quality": 78.0, "fit_index": 0.194, "fit_band": "Moderate",
+        "scored_meetings": 2,
+    },
+}
+
+# The empty state, which is what every brand-new application renders. Every
+# optional component is None here, so this is the case that catches a template
+# reaching for `.fit_band|lower` or formatting a null index.
+forecast_blank = {
+    "category": "Pipeline", "total": 4, "confidence": "none",
+    "reason": "Nothing to read yet — no scored meetings, no fit, no source.",
+    "components": {
+        "stage": 4.0, "meetings": 0.0, "fit": 0.0, "source": 0.0,
+        "quality": None, "fit_index": None, "fit_band": None, "scored_meetings": 0,
+    },
+}
+
+forecast_commit = {
+    "category": "Commit", "total": 100, "confidence": "high",
+    "reason": "Closed Won — this one is decided.",
+    "components": {
+        "stage": 0.0, "meetings": 0.0, "fit": 0.0, "source": 0.0,
+        "quality": None, "fit_index": None, "fit_band": None, "scored_meetings": 0,
+    },
+}
+
+FORECAST_VALUES = ["Pipeline", "Best Case", "Commit", "Closed"]
+
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
     ("posting_edit.html", {"active": "postings", "posting": posting}),
@@ -103,6 +144,7 @@ cases = [
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": score_rollup,
+        "forecast": forecast, "forecast_values": FORECAST_VALUES,
     }),
     # Nothing scored yet: the rollup is None and the widget should stay hidden
     # rather than rendering an empty box -- the common state for a brand-new
@@ -115,7 +157,8 @@ cases = [
         "postings": [posting],
         "activity": [{**row, "score": None} for row in activity],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": None,
+        "score_rollup": None, "forecast": forecast_blank,
+        "forecast_values": FORECAST_VALUES,
     }),
     # Every date null. This is the case the Dates block exists for: the fields
     # have to render as empty-but-present inputs with a "— not set" marker,
@@ -123,15 +166,21 @@ cases = [
     # also guards the `if f[2]` branches in the loop.
     ("application_edit.html (no dates set)", {
         "active": "board",
+        # manual_forecast is None here too: an existing row predates the column,
+        # and ensure_schema()'s ADD COLUMN leaves it NULL rather than applying
+        # the Python-side Pipeline default. Every application already in the
+        # Render database will render through this branch on first load.
         "app_obj": SimpleNamespace(**{
             **app_obj.__dict__, "applied_date": None, "created_at": None,
             "updated_at": None, "last_activity_date": None, "stage_history": [],
+            "manual_forecast": None,
         }),
         "stages": ["Saved", "Applied", "Closed Lost"],
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": score_rollup,
+        "forecast": forecast, "forecast_values": FORECAST_VALUES,
     }),
     # A downward move, to exercise the other branch of the trend pill.
     ("application_edit.html (cooling)", {
@@ -141,6 +190,7 @@ cases = [
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": {"latest": 30, "previous": 70, "delta": -40, "count": 3,
                          "stale_days": 41},
+        "forecast": forecast, "forecast_values": FORECAST_VALUES,
     }),
     # A single scored activity: there's no prior reading, so delta is None and
     # the trend pill has to be skipped without blowing up on the comparison.
@@ -151,6 +201,7 @@ cases = [
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": {"latest": 40, "previous": None, "delta": None, "count": 1,
                          "stale_days": None},
+        "forecast": forecast, "forecast_values": FORECAST_VALUES,
     }),
     ("meeting_edit.html", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],
@@ -167,6 +218,7 @@ cases = [
         "active": "meetings",
         "meeting": SimpleNamespace(**{
             **meeting.__dict__, "score": None, "score_reason": None, "scored_at": None,
+            "my_performance": None, "employer_engagement": None,
         }),
         "applications": [app_obj],
         "meeting_types": ["Hiring Manager", "Technical"], "granola_enabled": False,
@@ -184,10 +236,26 @@ cases = [
         "active": "meetings", "meetings": [meeting], "applications": [app_obj],
         "meeting_types": ["Hiring Manager"], "granola_enabled": True,
     }),
+    # A meeting rated on one axis only and one rated zero. Both are legal and
+    # both are easy to lose: `{% if m.my_performance %}` would hide the zero,
+    # which is the reading that says "that went badly" -- the opposite of the
+    # blank it would be mistaken for.
+    ("meetings.html (half-rated and zero)", {
+        "active": "meetings",
+        "meetings": [
+            SimpleNamespace(**{**meeting.__dict__, "my_performance": None,
+                               "employer_engagement": 40}),
+            SimpleNamespace(**{**meeting.__dict__, "my_performance": 0,
+                               "employer_engagement": 0, "score": 0}),
+        ],
+        "applications": [app_obj],
+        "meeting_types": ["Hiring Manager"], "granola_enabled": True,
+    }),
     ("board.html", {
         "active": "board", "stages": ["Staging", "Qualification", "Discovery"],
         "grouped": {"Staging": [], "Qualification": [app_obj], "Discovery": []},
         "rollups": {app_obj.id: score_rollup},
+        "forecasts": {app_obj.id: forecast},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
@@ -200,6 +268,7 @@ cases = [
         "grouped": {"Staging": [app_obj], "Qualification": [app_obj]},
         "rollups": {app_obj.id: {"latest": 45, "previous": 70, "delta": -25,
                                  "count": 4, "stale_days": 41}},
+        "forecasts": {app_obj.id: forecast_blank},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
@@ -210,7 +279,20 @@ cases = [
     ("board.html (nothing scored)", {
         "active": "board", "stages": ["Staging", "Qualification"],
         "grouped": {"Staging": [app_obj], "Qualification": []},
-        "rollups": {}, "default_stage": "Qualification",
+        "rollups": {}, "forecasts": {}, "default_stage": "Qualification",
+        "companies": [company], "resumes": [resume], "postings": [posting],
+        "sources": ["Referral"],
+    }),
+    # A card whose manual forecast is unset -- the state of every application
+    # already in the database, since ADD COLUMN backfills NULL. The card must
+    # skip the "≠" disagreement chip rather than comparing None to a string.
+    ("board.html (no manual forecast)", {
+        "active": "board", "stages": ["Qualification"],
+        "grouped": {"Qualification": [
+            SimpleNamespace(**{**app_obj.__dict__, "manual_forecast": None})
+        ]},
+        "rollups": {}, "forecasts": {app_obj.id: forecast_blank},
+        "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
     }),
@@ -221,6 +303,7 @@ cases = [
         "grouped": {"Qualification": [app_obj]},
         "rollups": {app_obj.id: {"latest": 60, "previous": None, "delta": None,
                                  "count": 1, "stale_days": None}},
+        "forecasts": {app_obj.id: forecast_commit},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],

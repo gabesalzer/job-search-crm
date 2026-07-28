@@ -546,24 +546,39 @@ itself.
 from six weeks ago and an 80 from yesterday are the same digits describing
 completely different situations, and on a board — where a column of them gets
 scanned at once — the confident-looking old one is exactly the card that
-misleads. Past two weeks the age renders in the warning colour. It's measured
-from `scored_at` (when you formed the judgment), not from the activity's own
-date, so a month-old meeting you scored yesterday reads as a day-old view. An
-activity with no usable date on any field reports `None` rather than an age —
-*unknown when* is a different claim from *very old*.
+misleads. Past two weeks the age renders in the warning colour. It follows the
+sort key, so it measures from the event rather than from the keystroke:
+"nothing has happened here in 31 days" is the thing worth acting on, and it
+stays true no matter when you got around to typing the number in. An activity
+with no usable date on any field reports `None` rather than an age — *unknown
+when* is a different claim from *very old*.
 
 ### Why `scored_at` is separate from the activity's own date
 
 You often score a meeting days after it happened — after the follow-up email
 lands, or doesn't. `meeting_date` records when you talked; `scored_at` records
-when you formed the judgment. The rollup orders by `scored_at` (falling back
-to the activity's own date when it's unset), so a three-week-old meeting you
-scored yesterday correctly lands *last* in the series: it reflects your most
-recent thinking even though the conversation itself is the oldest.
+when you formed the judgment.
 
-Keeping the two apart also makes calibration analysis possible later. "Was I
+Keeping the two apart makes calibration analysis possible later. "Was I
 overconfident at the recruiter-screen stage?" needs to know what you believed
 **at the time you believed it**, which a single conflated date can't tell you.
+
+It is *not*, however, what the rollup orders on, and getting that wrong was a
+real bug worth recording. The rollup originally sorted by `scored_at`, falling
+back to the activity's own date — but `_apply_score()` stamps `scored_at` every
+time it writes a number and is the only writer of `score` anywhere in the app,
+so every scored row has one and the fallback could never fire. The series was
+therefore ordered entirely by data entry. Log two meetings in one sitting,
+oldest typed in last, and the older conversation became the "latest" reading —
+while the activity list rendered directly beneath it on the same page sorted by
+the real dates and visibly disagreed with it.
+
+It now orders on the date the activity *happened* (`meeting_date`, or
+`last_message_at` then `started_at` for a thread), falling back to `scored_at`
+only for an activity carrying no date of its own — a fallback that can actually
+fire, since those fields are nullable. A score is a judgment *about* an event
+and belongs in the sequence where the event sits; when you formed it is a fact
+about your evening, not about the pursuit.
 
 ### Nothing writes the score automatically — yet
 
@@ -616,6 +631,172 @@ Blank means no judgment has been formed; `0` means you think it's dead. Both
 are falsy in Python, so every check uses `is not None` rather than
 truthiness — otherwise a "this is over" score would silently disappear from
 the timeline and the rollup.
+
+## Forecast
+
+Two numbers now sit on every Application, and they are allowed to disagree.
+
+**Manual Forecast** is a picklist — `Pipeline`, `Best Case`, `Commit`,
+`Closed` — that only you write. Nothing in the app touches that column.
+**Automated Forecast** is derived on every page render from four inputs and
+stored nowhere at all. Where they diverge is the whole point of having both;
+the board draws a small `≠ Best Case` badge next to any card where your call
+and the arithmetic part ways, because that gap is a question worth a minute of
+your attention and a matching pair is not.
+
+### Why the automated one is never stored
+
+Same argument as the score rollup, one step further along. A stored forecast
+is a snapshot of a moment, and the moment moves — a new meeting lands, a stage
+advances, a resume gets swapped — while the stored value sits there looking
+exactly as authoritative as it did the day it was written. A stale forecast
+and a fresh one are visually identical, which makes the stored version worse
+than no version: it is confidently wrong at no cost to itself.
+
+Recomputing costs four small reads that the board is already doing anyway
+(`selectinload` on meetings, threads, resume, and posting), and buys the
+guarantee that what you're looking at describes the record as it stands right
+now. The one thing this design gives up is history — you cannot ask "what did
+the model think three weeks ago?" If that question ever matters, the answer is
+a separate append-only snapshot table, not a mutable column on the
+Application.
+
+### The four inputs and their weights
+
+`W_STAGE = 30`, `W_MEETINGS = 35`, `W_FIT = 20`, `W_SOURCE = 15`. They sum to
+100 deliberately, so the total reads as a rough percentage and your own
+definition — "Commit: more likely than not, 75% or higher" — means what you
+said it means when it becomes `COMMIT_AT = 75`. `BEST_CASE_AT = 40` is where
+"possible if a few things break our way" stops being defensible and the honest
+answer becomes "I don't know yet."
+
+Meetings carry the most weight because they are the only input that is
+actually about *this* pursuit going well, rather than about the conditions it
+started under. Source carries the least because it is fixed at birth and never
+learns anything.
+
+### Stage is an input, not a cap
+
+You chose this explicitly, and it has a consequence worth naming: a
+Discovery-stage referral with excellent meetings and strong fit reaches 82 and
+reads **Commit**, while a Negotiation-stage outbound application with no
+meeting ratings reads **Pipeline**. Late stage does not floor the forecast and
+early stage does not ceiling it.
+
+The counter-argument is real. "More likely than not to end in an accepted
+offer" is a claim about the entire remaining path, and no amount of first-call
+warmth should let a Qualification-stage record make it. That objection is
+answered by making `STAGE_POINTS` rise steeply rather than linearly —
+Qualification is worth 4 of 30, Discovery 12, Takehome 19 — so an early
+pursuit has to be genuinely excellent on everything else to reach Commit,
+rather than merely good.
+
+### What the fit index actually measures, and what it doesn't
+
+`fit_index()` is a bag-of-words cosine between the resume text and the job
+description: tokenize, drop stopwords, compare the two term-frequency vectors.
+It measures whether the two documents talk about the same things. It does not
+measure whether you can do the job, and it is trivially gamed by pasting the
+JD into your resume.
+
+That honesty is why it carries the smallest of the four weights, why the raw
+number is never displayed, and why `fit_band()` collapses it to `Low` /
+`Moderate` / `Strong`. A user reading "0.27" next to the word "fit" will read
+it as 27% fit, which is not what it means and not a claim this arithmetic can
+support. Three buckets is about as much resolution as word overlap honestly
+carries.
+
+The floor and ceiling (`FIT_FLOOR = 0.08`, `FIT_CEILING = 0.30`) exist because
+the raw cosine's useful range is narrow and low. Two unrelated professional
+documents still share enough English to score above zero, and two documents in
+the same field rarely exceed 0.35. Points scale linearly between those bounds
+and clamp at both ends.
+
+### Two meeting columns, not one quality number
+
+`my_performance` and `employer_engagement` are separate 0–100 fields on
+`Meeting` because they answer different questions and diverge in the way that
+matters most. A strong performance met with flat engagement usually means the
+role is going somewhere else regardless of how you did; a weak performance met
+with high engagement means you have room you didn't think you had. Blending
+them at input time would erase exactly that signal.
+
+They are blended at *read* time, weighted `ENGAGEMENT_WEIGHT = 0.6` against
+`PERFORMANCE_WEIGHT = 0.4`, because their interest in you predicts the outcome
+better than your opinion of yourself does. Quality is read off the most recent
+scored meeting only — an early bad call that has since been superseded is
+history, not forecast — with a small depth bonus (`DEPTH_POINTS_PER_MEETING =
+2`, capped at `MAX_DEPTH_POINTS = 7`) for having got several meetings deep at
+all.
+
+These two fields deliberately carry no `*_at` stamp, unlike `score`.
+`scored_at` exists because the rollup has to order readings against each other
+over time; these are read only off the latest meeting, which is already
+ordered by `meeting_date`. A timestamp nobody reads is a column that can only
+rot.
+
+The blank-is-not-zero rule applies here as it does to `score`, and applies
+harder: a call where you didn't rate your own performance and a call you rated
+0 are opposite claims, and the model reads them as such.
+
+### Confidence rides alongside the category
+
+`confidence` counts how many of the four components had real data behind them
+and is reported *separately* from the band, never folded into it. A Pipeline
+that means "I have nothing to go on" and a Pipeline that means "I have plenty
+to go on and it's bad" are the same category and completely different
+situations. Values are `none` (nothing), `thin` (one or two components), and
+`ok` (three or four); `high` is reserved for the two closed short-circuits,
+where there is nothing left to be uncertain about.
+
+Stage counts toward confidence only once the pursuit is past Qualification.
+Every application is *born* at Qualification (`models.DEFAULT_STAGE`) — that
+is a fact about a column default, not something anybody learned — and counting
+it would let a brand-new empty record claim it had evidence.
+
+### Closed stages short-circuit
+
+`Closed Won` returns Commit at 100 and `Closed Lost` returns Pipeline at 0,
+both without running the arithmetic. A won application is not forecast, it is
+finished, and scoring it would produce the absurdity of a signed offer reading
+Best Case because nobody got around to filling in the meeting fields.
+
+### Why Manual Forecast defaults to Pipeline
+
+Pipeline literally means "no signal," so a record born there is making a true
+statement about itself rather than a placeholder one. The cost is that
+"deliberately judged Pipeline" and "never touched" look identical. If that
+distinction starts mattering, the fix is a `manual_forecast_set_at` column,
+not a nullable default — but it hasn't mattered yet and a column added
+speculatively is a column that gets ignored.
+
+Clearing the field in the UI writes NULL rather than snapping back to
+Pipeline. New rows are born Pipeline because that's honest; writing Pipeline
+back over a field you just deliberately emptied would be the app overruling
+you, which is precisely what a hand-maintained field must never do.
+
+One deployment note: `ensure_schema()` adds `manual_forecast` to the live
+database with `ALTER TABLE ADD COLUMN`, and SQLAlchemy's `default=` is a
+Python-side INSERT default, not DDL. Every application already in the database
+therefore gets NULL, not Pipeline, on the first deploy. Both templates handle
+that branch and `tests/render_check.py` covers it explicitly, because the
+first page load after a migration is exactly where a missing null check turns
+into a 500.
+
+### `app/forecast.py` imports nothing from the app
+
+It is stdlib-only on purpose — no SQLAlchemy, nothing from `app.models`. The
+routers translate ORM objects into plain dicts and strings at the boundary and
+hand those in.
+
+The payoff is `tests/test_forecast.py`, which is the first test file in this
+project that imports and exercises the **real** code rather than a
+hand-maintained mirror of it. Every other test file in `tests/` reimplements
+the logic it checks, which means it can pass while the app is broken; this one
+cannot. The one thing that arrangement gives up is compile-time agreement
+between `forecast.py`'s category and stage literals and the enums in
+`models.py` — bought back by three tests that read `app/models.py` as *text*
+and regex out the enum members.
 
 ## Context vs. notes on an Application
 
