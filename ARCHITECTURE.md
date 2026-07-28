@@ -198,6 +198,90 @@ Hiring Manager Screen move, which collapses into a Discovery → Discovery
 no-op once both fold into one stage) are cleaned up rather than left as
 misleading duplicate entries.
 
+### Why there's no `Applied` stage
+
+The obvious gap in the stage list is that nothing marks *"I submitted this."*
+The tempting fix is a new `Applied` stage in front of Qualification. It
+doesn't work, and the reason is worth writing down because it will look like
+an omission again later.
+
+Every application is **born** at Qualification — `stage` carries
+`default=Stage.QUALIFICATION`, so the value is a starting state rather than
+something a pursuit ever *reaches*. That makes Qualification useless as a
+funnel denominator: 100% of applications reach it by construction, and the
+`changed_at` on its Stage History row records when the record was typed in,
+not when anything happened in the world. Putting `Applied` in front of it
+would relocate the problem, not solve it — records would simply be born at
+`Applied` and *that* would become the meaningless stage.
+
+A nullable `applied_date` column on Job Application is strictly better. It's a
+fact about the world rather than a workflow position: a submission either
+happened on a date or it didn't. It is absent exactly when it should be — a
+recruiter-inbound role you never applied to has no applied date and correctly
+drops out of any application-cohort math, where an `Applied` stage would have
+forced you to either lie or leave a hole in the ordering. And it can be
+backfilled months later for a pursuit whose early stages were never logged,
+which a stage transition can't be without fabricating history.
+
+`GET /api/analytics/applied-conversion` is what that column buys. The cohort
+is "applications I actually submitted," and the first stage that means
+anything is **Discovery** — the first one you have to be *let into*. Each
+stage reports how many of the cohort reached it, conversion off the applied
+count, and median days from submission. Timing is measured only off real Stage
+History transitions, so an application credited with a stage by implication
+(reaching a later stage implies passing through the earlier ones) counts
+toward `reached` but contributes nothing to the median.
+
+### Reaching a stage credits every stage before it
+
+Both the funnel and the applied-conversion endpoint compute "how many
+applications ever reached stage X" by crediting the whole prefix of
+`STAGE_ORDER` up to and including the stage observed, from Stage History rows
+*and* from the application's current stage.
+
+Crediting only the observed stage seems more literal and is wrong, because
+applications routinely lack a history row for a stage they demonstrably passed
+through. An application created directly at Discovery has an opening row of
+`None → Discovery` and no Qualification row at all. Stages can also be skipped
+outright — the model says so explicitly, since plenty of loops have no
+Takehome. Under literal crediting, a *later* stage can then report more
+applications than an *earlier* one, which isn't a funnel: it produced
+Qualification → Discovery conversion of 100% on a dataset where the true
+figure was 50%, and can exceed 100% outright.
+
+The invariant to preserve is monotonicity — the counts down `STAGE_ORDER`
+never increase — and it's asserted directly in `tests/test_applied_analytics.py`
+rather than left as a comment. Note this affects *depth* only: the closed
+stages aren't in `STAGE_ORDER`, so a Closed Lost application keeps whatever
+depth its history earned it and gains nothing from closing.
+
+### Every date on an Application is hand-correctable
+
+`applied_date`, `created_at`, `last_activity_date` and `updated_at` all render
+as editable inputs on the Application edit page, including when they're null —
+a never-set date shows as an empty field marked "not set" rather than
+vanishing. The reason is the same one behind the editable Stage History rows:
+the date something was *logged here* is routinely later than the date it
+happened. You log Monday's rejection on Thursday. A tracker whose dates you
+can't correct ends up measuring your data-entry habits instead of your job
+search, and every conversion-velocity number computed off it inherits that
+error.
+
+`updated_at` needs care, because it carries `onupdate=_utcnow`. SQLAlchemy
+fires `onupdate` only when the column is absent from the UPDATE's SET clause,
+so an explicit assignment does win — but the form round-trips the current
+value on every save, and blindly assigning it back would freeze "last
+modified" at whatever was in the box. So the handler only overrides when the
+submitted value actually *differs* from what's stored, and the comparison
+truncates both sides to the minute: `<input type="datetime-local">` can't
+express seconds, so raw datetime equality would report a spurious edit on
+every single save.
+
+A blank date field means "leave it alone" for `created_at` and
+`last_activity_date` — clearing them by accident would scramble ordering. The
+exception is `applied_date`, where blank is a real answer meaning "I never
+applied to this," which is why it's the one date the form can clear.
+
 ## Meetings and Email Threads
 
 Both are activity records, but deliberately **separate objects**, not one

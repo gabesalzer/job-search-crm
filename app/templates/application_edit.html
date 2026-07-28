@@ -54,10 +54,6 @@
         </select>
       </div>
       <div class="field">
-        <label>Applied date</label>
-        <input name="applied_date" type="datetime-local" value="{{ app_obj.applied_date.strftime('%Y-%m-%dT%H:%M') if app_obj.applied_date else '' }}">
-      </div>
-      <div class="field">
         <label>Source</label>
         <select name="source">
           <option value="">—</option>
@@ -67,6 +63,33 @@
         </select>
       </div>
     </div>
+    <div style="margin-top:0.9rem;padding-top:0.8rem;border-top:1px solid var(--line)">
+      <h3 style="font-size:0.86rem;margin:0 0 0.15rem">Dates</h3>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0 0 0.6rem">
+        Every date on this record, including the ones that have never been set. All of them are editable —
+        when a thing was <em>logged here</em> is routinely later than when it happened, and an uncorrectable
+        date measures your data entry rather than your job search.
+      </p>
+      <div class="form-grid">
+        {% for f in [
+          ("applied_date", "Applied", app_obj.applied_date, "When the application actually went in. Blank for roles that came to you."),
+          ("created_at", "Created", app_obj.created_at, "When this record was first added here."),
+          ("last_activity_date", "Last activity", app_obj.last_activity_date, "Auto-stamped on a stage change; an edit here wins."),
+          ("updated_at", "Updated", app_obj.updated_at, "Re-stamped on save unless you change it by hand."),
+        ] %}
+        <div class="field">
+          <label>
+            {{ f[1] }}
+            {% if not f[2] %}<span style="color:var(--neutral);font-weight:400"> — not set</span>{% endif %}
+          </label>
+          <input name="{{ f[0] }}" type="datetime-local"
+                 value="{{ f[2].strftime('%Y-%m-%dT%H:%M') if f[2] else '' }}">
+          <p style="font-size:0.7rem;color:var(--neutral);margin:0.2rem 0 0">{{ f[3] }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
     <div class="field" style="margin-top:0.5rem">
       <label>Context</label>
       <textarea name="context" rows="4" placeholder="Why this role is worth pursuing, what you know about the team, comp, timeline, and what would make you walk.">{{ app_obj.context or '' }}</textarea>

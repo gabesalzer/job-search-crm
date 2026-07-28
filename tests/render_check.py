@@ -44,6 +44,8 @@ app_obj = SimpleNamespace(
     id=4, title="Sr. Operations Manager", company_id=1, company=company, stage=enum("Applied"),
     lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
+    created_at=datetime(2026, 6, 28, 9, 0), updated_at=datetime(2026, 7, 12, 16, 30),
+    last_activity_date=datetime(2026, 7, 10, 15, 0),
     email_threads=[], context="Team is 4 people; comp band unclear.", source=enum("Referral"),
     stage_history=[
         SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
@@ -114,6 +116,22 @@ cases = [
         "activity": [{**row, "score": None} for row in activity],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": None,
+    }),
+    # Every date null. This is the case the Dates block exists for: the fields
+    # have to render as empty-but-present inputs with a "— not set" marker,
+    # rather than disappearing. strftime on a None would blow up here, so this
+    # also guards the `if f[2]` branches in the loop.
+    ("application_edit.html (no dates set)", {
+        "active": "board",
+        "app_obj": SimpleNamespace(**{
+            **app_obj.__dict__, "applied_date": None, "created_at": None,
+            "updated_at": None, "last_activity_date": None, "stage_history": [],
+        }),
+        "stages": ["Saved", "Applied", "Closed Lost"],
+        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "postings": [posting], "activity": activity,
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "score_rollup": score_rollup,
     }),
     # A downward move, to exercise the other branch of the trend pill.
     ("application_edit.html (cooling)", {

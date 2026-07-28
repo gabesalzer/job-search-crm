@@ -259,6 +259,9 @@ def update_application_ui(
     job_posting_id: Optional[str] = Form(None),
     lost_reason: str = Form(""),
     applied_date: str = Form(""),
+    created_at: str = Form(""),
+    last_activity_date: str = Form(""),
+    updated_at: str = Form(""),
     notes: str = Form(""),
     context: str = Form(""),
     source: str = Form(""),
@@ -284,6 +287,33 @@ def update_application_ui(
     app_obj.lost_reason = (
         models.LostReason(lost_reason) if new_stage == models.Stage.CLOSED_LOST and lost_reason else None
     )
+
+    # --- Hand-correctable timestamps -------------------------------------- #
+    # Every date on the record is editable, because the date a thing was
+    # *recorded* here is routinely later than the date it happened -- you log
+    # Monday's rejection on Thursday. A tracker whose dates you can't correct
+    # measures your data-entry habits instead of your job search.
+    #
+    # created_at and last_activity_date are plain assignments. Note that
+    # last_activity_date is applied *after* the stage block above, so an
+    # explicit edit wins over the automatic "now" stamp a stage change sets.
+    new_created = _parse_dt(created_at)
+    if new_created:
+        app_obj.created_at = new_created
+    new_activity = _parse_dt(last_activity_date)
+    if new_activity:
+        app_obj.last_activity_date = new_activity
+
+    # updated_at needs care. The column carries onupdate=_utcnow, which fires
+    # only when the column is absent from the UPDATE's SET clause -- so an
+    # explicit assignment does win. But the form round-trips the current value
+    # on every save, and blindly assigning it back would freeze updated_at
+    # forever: "last modified" would quietly become "whatever was in the box."
+    # So only override when the submitted value actually differs from what's
+    # stored; otherwise leave the column alone and let onupdate stamp now.
+    new_updated = _parse_dt(updated_at)
+    if new_updated and not _same_to_the_minute(new_updated, app_obj.updated_at):
+        app_obj.updated_at = new_updated
 
     db.commit()
     return RedirectResponse(url="/board", status_code=303)
@@ -726,6 +756,21 @@ def _parse_dt(value: str):
         return datetime.fromisoformat(value)  # handles YYYY-MM-DD and ...THH:MM
     except ValueError:
         return None
+
+
+def _same_to_the_minute(a, b) -> bool:
+    """Compare two datetimes at the resolution the form can actually express.
+
+    `<input type="datetime-local">` renders and submits YYYY-MM-DDTHH:MM, so a
+    stored timestamp's seconds and microseconds never survive the round trip.
+    Comparing raw datetimes would therefore report a difference on every save
+    for any value that was set programmatically (which all of them are, since
+    the defaults use datetime.now). Truncating both sides to the minute is what
+    makes "did the user actually change this field?" answerable.
+    """
+    if a is None or b is None:
+        return a is b
+    return a.replace(second=0, microsecond=0) == b.replace(second=0, microsecond=0)
 
 
 def _extract_upload_text(file: Optional[UploadFile]) -> str:
