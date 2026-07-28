@@ -33,7 +33,7 @@
       <div class="field">
         <label>Stage</label>
         <select name="stage">
-          {% for s in stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+          {% for s in stages %}<option value="{{ s }}" {% if s == default_stage %}selected{% endif %}>{{ s }}</option>{% endfor %}
         </select>
       </div>
       <div class="field">
@@ -76,6 +76,23 @@
           </div>
         </div>
         <div class="co">{{ app.company.name if app.company else "—" }}</div>
+        {% set roll = rollups.get(app.id) if rollups else None %}
+        {% if roll %}
+        <div class="scorerow" title="Latest win-likelihood reading across this application's scored meetings and email threads">
+          <span class="score">{{ roll.latest }}</span>
+          {% if roll.delta is not none %}
+          <span class="pill {% if roll.delta > 0 %}up{% elif roll.delta < 0 %}down{% endif %}">
+            {% if roll.delta > 0 %}▲ +{{ roll.delta }}{% elif roll.delta < 0 %}▼ {{ roll.delta }}{% else %}flat{% endif %}
+          </span>
+          {% endif %}
+          {% if roll.stale_days is not none %}
+          <span class="age {% if roll.stale_days >= 14 %}stale{% endif %}"
+                title="Days since this reading was taken">
+            {% if roll.stale_days == 0 %}today{% else %}{{ roll.stale_days }}d ago{% endif %}
+          </span>
+          {% endif %}
+        </div>
+        {% endif %}
         <div class="metarow">
           {% if app.resume %}<span class="tag">{{ app.resume.label }}</span>{% endif %}
           {% if app.source %}<span class="tag" title="How this application originated">{{ app.source.value }}</span>{% endif %}

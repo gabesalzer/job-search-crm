@@ -49,6 +49,12 @@
   .card .title{font-weight:600;margin-bottom:0.12rem}
   .card .co{color:var(--muted);font-size:0.82rem}
   .card .metarow{margin-top:0.45rem;display:flex;gap:0.3rem;flex-wrap:wrap}
+  .card .scorerow{margin-top:0.4rem;display:flex;gap:0.35rem;align-items:baseline}
+  .card .score{font-size:1.05rem;font-weight:650;line-height:1}
+  .card .age{font-size:0.7rem;color:var(--neutral);margin-left:auto;white-space:nowrap}
+  /* A reading this old is a claim about a situation that has probably moved on,
+     so it reads as a warning rather than as reassuring supporting detail. */
+  .card .age.stale{color:var(--down)}
   .col.over{background:#f0f4ff;outline:2px dashed var(--accent);outline-offset:-4px}
   .empty{color:var(--neutral);text-align:center;padding:1rem 0.4rem;font-size:0.82rem}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0.9rem}

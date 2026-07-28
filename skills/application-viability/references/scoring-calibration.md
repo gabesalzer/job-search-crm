@@ -20,6 +20,7 @@ not measured facts about this user.
 
 | Stage | Starting anchor | What it means |
 | --- | --- | --- |
+| Staging | 2 | Pre-application. No application has been submitted yet; the work is landing a referral or intro. Most staged roles never even become applications, so the anchor sits *below* Qualification. |
 | Qualification | 5 | Is this worth pursuing at all. Almost everything here dies, most of it silently. |
 | Discovery | 12 | Fit is being established in both directions. Still early; the funnel is wide here. |
 | Takehome | 25 | Real investment on both sides. Selection has happened, but takehomes are also where pursuits go quiet. |

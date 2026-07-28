@@ -161,6 +161,12 @@
       from {{ score_rollup.previous }}
     </span>
     {% endif %}
+    {% if score_rollup.stale_days is not none %}
+    <span class="pill" style="{% if score_rollup.stale_days >= 14 %}color:var(--down);border-color:#f2c9c9{% endif %}"
+          title="Days since this reading was taken">
+      {% if score_rollup.stale_days == 0 %}scored today{% else %}{{ score_rollup.stale_days }}d old{% endif %}
+    </span>
+    {% endif %}
     <span style="font-size:0.74rem;color:var(--neutral);margin-left:auto">
       latest of {{ score_rollup.count }} scored {% if score_rollup.count == 1 %}activity{% else %}activities{% endif %}
     </span>

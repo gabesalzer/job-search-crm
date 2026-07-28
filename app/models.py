@@ -98,6 +98,7 @@ class Stage(str, enum.Enum):
     opportunity does. See ARCHITECTURE.md / the July 2026 stage redesign.
     """
 
+    STAGING = "Staging"                 # pre-application: working the angle in
     QUALIFICATION = "Qualification"     # is this worth pursuing at all
     DISCOVERY = "Discovery"             # how strong a fit, both directions
     TAKEHOME = "Takehome"               # proof you can do the work
@@ -108,6 +109,28 @@ class Stage(str, enum.Enum):
 
 
 # Ordered list used for funnel/conversion analysis and UI ordering.
+#
+# Two members of Stage are deliberately absent: Closed Lost (a terminal exit,
+# not a depth) and Staging (see below). Everything that walks this list --
+# funnel counts, conversion, resume traction -- therefore ignores both.
+#
+# Staging is where a role sits before you've applied to it: you found the
+# posting and you're working the angle in (finding the referral, warming the
+# intro). It's a real state you occupy and do work in, which is why it's a
+# stage and not a date column -- but it is *not* a rung of the funnel, and the
+# reason is the column default. `stage` defaults to QUALIFICATION, so every
+# application is born there; combined with the prefix-crediting in
+# analytics._reached_sets, whichever stage is the default is reached by 100%
+# of applications by construction and is worthless as a denominator. Putting
+# Staging at the front of STAGE_ORDER would simply relocate that dead
+# denominator onto Staging -- the same objection that keeps `Applied` from
+# being a stage at all (see analytics.applied_conversion's docstring).
+#
+# Leaving it out costs nothing real. An application at Staging hasn't entered
+# the pipeline yet and correctly counts toward no stage. When it does, the
+# move writes a `Staging -> Qualification` StageHistory row, and *that* row is
+# the honest cohort filter for "of the roles I staged, how many converted" --
+# real dated transitions rather than credit implied by position in a list.
 STAGE_ORDER = [
     Stage.QUALIFICATION,
     Stage.DISCOVERY,
@@ -118,6 +141,11 @@ STAGE_ORDER = [
 ]
 
 CLOSED_STAGES = {Stage.CLOSED_WON, Stage.CLOSED_LOST}
+
+# The stage an application is born at when nothing else is specified. Named
+# rather than inlined because the funnel's meaning depends on which stage this
+# is -- see the note above STAGE_ORDER.
+DEFAULT_STAGE = Stage.QUALIFICATION
 
 
 class LostReason(str, enum.Enum):
@@ -266,7 +294,7 @@ class JobApplication(Base):
         Integer, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
-    stage = Column(Enum(Stage), nullable=False, default=Stage.QUALIFICATION, index=True)
+    stage = Column(Enum(Stage), nullable=False, default=DEFAULT_STAGE, index=True)
     lost_reason = Column(Enum(LostReason))  # only meaningful when Closed Lost
 
     title = Column(String(512))  # denormalized role title for convenience

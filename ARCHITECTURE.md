@@ -146,7 +146,12 @@ History only ever reflects real pipeline movement.
 
 Ordered pipeline (Opportunity-style), stored as an enum:
 
-`Qualification → Discovery → Takehome → Executive Signoff → Negotiation → Closed Won / Closed Lost`
+`Staging ⇢ Qualification → Discovery → Takehome → Executive Signoff → Negotiation → Closed Won / Closed Lost`
+
+The dashed arrow is deliberate. `Staging` and `Closed Lost` are both real
+stages you can park a record in, but neither is a rung of the funnel — see
+*The `Staging` stage* below, and the note above `STAGE_ORDER` in
+`app/models.py`.
 
 Every time `stage` changes, a Stage History row is written automatically
 (`from_stage`, `to_stage`, `changed_at`) via a SQLAlchemy attribute event
@@ -197,6 +202,58 @@ than reset, and now-redundant history rows (e.g. a logged Recruiter Screen →
 Hiring Manager Screen move, which collapses into a Discovery → Discovery
 no-op once both fold into one stage) are cleaned up rather than left as
 misleading duplicate entries.
+
+### The `Staging` stage
+
+`Staging` is where a role sits *before* you've applied to it. You found the
+posting, you want it, and the work in front of you isn't submitting an
+application — it's working the angle in. Jellyfish is the canonical case: the
+VP of Marketing there is a former colleague, so the right first move is
+reaching out to her, not dropping a resume into a form.
+
+Read this section next to the one below it, because the two decisions look
+contradictory and aren't. **`Applied` is an event; `Staging` is a state.**
+Applying happens on a date and is then over — there's nothing to occupy, so it
+belongs in a nullable `applied_date` column. Staging is somewhere a pursuit
+*sits*, accumulating meetings and notes, for as long as it takes to land the
+intro. States are what stages are for. That's the whole test: if you can be
+"in" it for a week, it's a stage; if it's a thing that happened, it's a date.
+
+Staging also disambiguates something the date column can't. A blank
+`applied_date` currently means two unrelated things — *haven't applied yet*
+and *never will apply, they came to me* — and both kinds of record sat at
+Qualification, indistinguishable from a role you did apply to and never heard
+back on. Staging pulls the first meaning out into the stage, where it's
+visible on the board.
+
+**It is not in `STAGE_ORDER`, and that's load-bearing.** `stage` defaults to
+`Qualification`, so every application is *born* there; combined with the
+prefix-crediting described below, whichever stage is the default is reached by
+100% of applications by construction and is worthless as a denominator.
+Putting Staging at the front of `STAGE_ORDER` and making it the new default
+would move that dead denominator onto Staging rather than removing it — which
+is precisely the objection that keeps `Applied` from being a stage at all.
+There's precedent either way: `STAGE_ORDER` has always been a *subset* of
+`Stage`, because `Closed Lost` is a terminal exit rather than a depth. Staging
+is the same shape at the other end of the pipeline.
+
+Leaving it out costs nothing. An application at Staging hasn't entered the
+pipeline and correctly counts toward no stage, so staged roles can pile up
+without diluting conversion. When one converts, the move writes a real
+`Staging → Qualification` Stage History row — and *that row* is the honest
+cohort filter for the metric Staging enables: **of the roles I staged, how
+many turned into a live pursuit, and how long did the angle take?** Same shape
+as the `applied_date` cohort in `/api/analytics/applied-conversion`: real
+dated transitions, never credit implied by position in a list. A
+recruiter-inbound role never passes through Staging and is therefore neither a
+staged success nor a staged failure — it's simply outside that measurement,
+which is correct. The endpoint isn't built yet;
+`tests/test_staging_stage.py` proves out its shape, including that leaving
+Staging for `Closed Lost` counts as the angle failing rather than converting.
+
+Adding the enum value required no migration. There's no `create_constraint`
+anywhere in `models.py`, so SQLAlchemy 2.0's default `create_constraint=False`
+applies and the existing SQLite table has no CHECK constraint to fight.
 
 ### Why there's no `Applied` stage
 
@@ -462,9 +519,38 @@ keep the history rather than the latest value.
 
 The Application's own number is therefore **derived at display time**
 (`_score_rollup()` in `app/routers/ui.py`) rather than stored: latest reading,
-the change from the one before it, and how many readings back it. Nothing to
-keep in sync, no backfill when you rescore something, and no possibility of a
-stored rollup quietly disagreeing with the rows it summarizes.
+the change from the one before it, how many readings back it, and how old the
+latest one is. Nothing to keep in sync, no backfill when you rescore
+something, and no possibility of a stored rollup quietly disagreeing with the
+rows it summarizes.
+
+Note what's deliberately *not* there: an average. Averaging a 22 from a screen
+that went badly with an 80 from two weeks earlier produces a 51 describing a
+moment that never existed. The latest reading is your current position; the
+delta is the part carrying information.
+
+### Where the rollup surfaces, and why it carries an age
+
+The rollup renders in two places: the Application edit page, above the
+activity timeline, and — since it's what makes a pipeline scannable — on each
+board card. A pipeline view whose whole purpose is comparing pursuits at a
+glance is the wrong place to hide the one number that ranks them.
+
+Both are wrapped in a truth condition rather than a placeholder: the rollup
+returns `None` when nothing on that application has been scored, and the
+widget disappears entirely instead of rendering an empty box or a zero. Blank
+and `0` are different claims here, the same way they are on the score field
+itself.
+
+`stale_days` exists because a number with no age on it lies by omission. An 80
+from six weeks ago and an 80 from yesterday are the same digits describing
+completely different situations, and on a board — where a column of them gets
+scanned at once — the confident-looking old one is exactly the card that
+misleads. Past two weeks the age renders in the warning colour. It's measured
+from `scored_at` (when you formed the judgment), not from the activity's own
+date, so a month-old meeting you scored yesterday reads as a day-old view. An
+activity with no usable date on any field reports `None` rather than an age —
+*unknown when* is a different claim from *very old*.
 
 ### Why `scored_at` is separate from the activity's own date
 

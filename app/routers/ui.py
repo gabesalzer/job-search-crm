@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import models
 from ..database import get_db
@@ -112,6 +112,14 @@ def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
     part that actually carries information -- a 55 on its own says little, a
     55 that was 80 last week says the pursuit is cooling.
 
+    `stale_days` is how old that latest reading is, and it's there because a
+    number with no age on it lies by omission: an 80 from six weeks ago and an
+    80 from yesterday are the same digits describing completely different
+    situations. That matters most on the board, where a column of them gets
+    scanned at once and the confident-looking old one is exactly the card that
+    misleads. It's None when the latest reading has no usable date at all,
+    which is a different claim from "scored today".
+
     Returns None when nothing has been scored, so the template can stay quiet
     instead of rendering an empty widget.
     """
@@ -138,13 +146,21 @@ def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
     if not scored:
         return None
     scored.sort(key=lambda row: row[0])
-    latest = scored[-1][1]
+    latest_at, latest = scored[-1]
     previous = scored[-2][1] if len(scored) > 1 else None
+    # datetime.min is the sentinel _sortable() returns for an activity with no
+    # date on any of its fields. Subtracting from it would report an age in the
+    # hundreds of thousands of days, so an undated reading reports no age at all.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_days = (
+        None if latest_at == datetime.min else max((now - latest_at).days, 0)
+    )
     return {
         "latest": latest,
         "previous": previous,
         "delta": None if previous is None else latest - previous,
         "count": len(scored),
+        "stale_days": stale_days,
     }
 
 
@@ -158,13 +174,31 @@ def root():
 # --------------------------------------------------------------------------- #
 @router.get("/board")
 def board(request: Request, db: Session = Depends(get_db)):
+    # The score rollup reads every scored meeting and thread on each card, so
+    # load both up front. Without this the board issues two queries per
+    # application just to render the numbers.
+    apps = (
+        db.query(models.JobApplication)
+        .options(
+            selectinload(models.JobApplication.meetings),
+            selectinload(models.JobApplication.email_threads),
+        )
+        .all()
+    )
     grouped: dict[str, list] = {s: [] for s in STAGE_VALUES}
-    for app_obj in db.query(models.JobApplication).all():
+    for app_obj in apps:
         grouped.setdefault(app_obj.stage.value, []).append(app_obj)
     return templates.TemplateResponse(request, "board.html", {
         "active": "board",
         "stages": STAGE_VALUES,
         "grouped": grouped,
+        # Same derivation the Application page uses, keyed by id so a card can
+        # look up its own without the template calling into Python.
+        "rollups": {a.id: _score_rollup(a) for a in apps},
+        # The board's stage picker defaults to the same stage the column does.
+        # Leaving it on whatever happens to be first in the list would quietly
+        # make Staging the default for every new record.
+        "default_stage": models.DEFAULT_STAGE.value,
         "sources": APPLICATION_SOURCE_VALUES,
         "companies": db.query(models.Company).order_by(models.Company.name).all(),
         "resumes": db.query(models.Resume).order_by(models.Resume.label).all(),
@@ -178,7 +212,11 @@ def board(request: Request, db: Session = Depends(get_db)):
 def create_application_ui(
     company_id: int = Form(...),
     title: str = Form(""),
-    stage: str = Form("Saved"),
+    # "Saved" was a stage in the pre-July-2026 enum and stopped being a valid
+    # value at the migration -- a post without a stage field would have raised
+    # ValueError on models.Stage(stage). The form always sends one, so this
+    # never fired, but the fallback should be a stage that actually exists.
+    stage: str = Form(models.DEFAULT_STAGE.value),
     resume_id: Optional[str] = Form(None),
     job_posting_id: Optional[str] = Form(None),
     source: str = Form(""),

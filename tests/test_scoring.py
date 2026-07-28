@@ -74,9 +74,13 @@ def _sortable(dt):
     return dt
 
 
-def score_rollup(activities):
+def score_rollup(activities, now=None):
     """Mirror of ui._score_rollup(), flattened over one list since the real
-    one only differs in which date field each side falls back to."""
+    one only differs in which date field each side falls back to.
+
+    `now` is a parameter here only so the staleness assertions are
+    deterministic; the real one reads the clock.
+    """
     scored = [
         (_sortable(a.scored_at or a.when), a.score)
         for a in activities
@@ -85,13 +89,16 @@ def score_rollup(activities):
     if not scored:
         return None
     scored.sort(key=lambda row: row[0])
-    latest = scored[-1][1]
+    latest_at, latest = scored[-1]
     previous = scored[-2][1] if len(scored) > 1 else None
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_days = None if latest_at == datetime.min else max((now - latest_at).days, 0)
     return {
         "latest": latest,
         "previous": previous,
         "delta": None if previous is None else latest - previous,
         "count": len(scored),
+        "stale_days": stale_days,
     }
 
 
@@ -220,8 +227,10 @@ def test_nothing_scored_returns_none():
 
 
 def test_single_score_has_no_delta():
-    roll = score_rollup([Activity(when=JULY, score=40, scored_at=JULY)])
-    assert roll == {"latest": 40, "previous": None, "delta": None, "count": 1}
+    roll = score_rollup([Activity(when=JULY, score=40, scored_at=JULY)], now=JULY)
+    assert roll == {
+        "latest": 40, "previous": None, "delta": None, "count": 1, "stale_days": 0,
+    }
 
 
 def test_latest_and_delta_follow_scored_at_not_the_activity_date():
@@ -302,6 +311,61 @@ def test_activity_with_no_dates_at_all_sorts_first():
     roll = score_rollup([undated, dated])
     assert roll["latest"] == 90
     assert roll["previous"] == 10
+
+
+# --------------------------------------------------------------------------- #
+# Staleness -- the age of the latest reading
+# --------------------------------------------------------------------------- #
+def test_stale_days_measures_the_latest_reading_not_the_oldest():
+    """The board shows one number per card, and the age has to describe *that*
+    number. Measuring from the first reading would make a freshly-rescored
+    application look abandoned."""
+    roll = score_rollup([
+        Activity(when=JULY - timedelta(days=60), score=30, scored_at=JULY - timedelta(days=60)),
+        Activity(when=JULY, score=70, scored_at=JULY),
+    ], now=JULY + timedelta(days=3))
+    assert roll["latest"] == 70
+    assert roll["stale_days"] == 3
+
+
+def test_stale_days_follows_scored_at_not_the_meeting_date():
+    """A meeting from a month ago that you scored yesterday is a day-old
+    judgment, not a month-old one -- the age tracks when you formed the view."""
+    roll = score_rollup(
+        [Activity(when=JULY - timedelta(days=30), score=55, scored_at=JULY)],
+        now=JULY + timedelta(days=1),
+    )
+    assert roll["stale_days"] == 1
+
+
+def test_undated_reading_reports_no_age_rather_than_a_huge_one():
+    """An activity with neither `scored_at` nor a date of its own sorts on
+    datetime.min. Subtracting from that yields ~740,000 days, which would
+    render as a nonsense number on the card, so the age is None instead --
+    "unknown when", not "very old"."""
+    roll = score_rollup([Activity(when=None, score=45, scored_at=None)], now=JULY)
+    assert roll["latest"] == 45
+    assert roll["stale_days"] is None
+
+
+def test_a_future_dated_reading_clamps_to_zero():
+    """`scored_at` is stamped by the app, but the fallback dates are typed in
+    by hand and can legitimately be in the future (a scheduled meeting scored
+    in advance). A negative age is meaningless on a card, so it floors at 0."""
+    roll = score_rollup(
+        [Activity(when=JULY + timedelta(days=5), score=60, scored_at=None)], now=JULY
+    )
+    assert roll["stale_days"] == 0
+
+
+def test_stale_days_survives_the_aware_naive_mix():
+    """Same hazard as the ordering: `scored_at` is aware, `now` is naive.
+    Subtracting the two raises TypeError, so both are flattened first."""
+    roll = score_rollup(
+        [Activity(when=None, score=80, scored_at=datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc))],
+        now=datetime(2026, 7, 21, 0, 0),
+    )
+    assert roll["stale_days"] == 20
 
 
 if __name__ == "__main__":

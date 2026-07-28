@@ -91,7 +91,7 @@ activity = [
 # Mirrors what ui._score_rollup() returns: latest reading plus the change from
 # the one before it. Kept as a literal so the template can be smoke-tested
 # without importing the app package (which needs FastAPI/SQLAlchemy).
-score_rollup = {"latest": 70, "previous": 55, "delta": 15, "count": 2}
+score_rollup = {"latest": 70, "previous": 55, "delta": 15, "count": 2, "stale_days": 3}
 
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
@@ -139,7 +139,8 @@ cases = [
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": {"latest": 30, "previous": 70, "delta": -40, "count": 3},
+        "score_rollup": {"latest": 30, "previous": 70, "delta": -40, "count": 3,
+                         "stale_days": 41},
     }),
     # A single scored activity: there's no prior reading, so delta is None and
     # the trend pill has to be skipped without blowing up on the comparison.
@@ -148,7 +149,8 @@ cases = [
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": {"latest": 40, "previous": None, "delta": None, "count": 1},
+        "score_rollup": {"latest": 40, "previous": None, "delta": None, "count": 1,
+                         "stale_days": None},
     }),
     ("meeting_edit.html", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],
@@ -183,10 +185,45 @@ cases = [
         "meeting_types": ["Hiring Manager"], "granola_enabled": True,
     }),
     ("board.html", {
-        "active": "board", "stages": ["Saved", "Applied"],
-        "grouped": {"Saved": [], "Applied": [app_obj]}, "companies": [company],
-        "resumes": [resume], "postings": [posting],
+        "active": "board", "stages": ["Staging", "Qualification", "Discovery"],
+        "grouped": {"Staging": [], "Qualification": [app_obj], "Discovery": []},
+        "rollups": {app_obj.id: score_rollup},
+        "default_stage": "Qualification",
+        "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+    }),
+    # A card whose latest reading is old enough to be flagged, and one sitting
+    # in Staging. These are the two states the card renders differently from
+    # the ordinary case, so both are worth a smoke test.
+    ("board.html (stale reading, staged card)", {
+        "active": "board", "stages": ["Staging", "Qualification"],
+        "grouped": {"Staging": [app_obj], "Qualification": [app_obj]},
+        "rollups": {app_obj.id: {"latest": 45, "previous": 70, "delta": -25,
+                                 "count": 4, "stale_days": 41}},
+        "default_stage": "Qualification",
+        "companies": [company], "resumes": [resume], "postings": [posting],
+        "sources": ["Referral"],
+    }),
+    # Nothing scored anywhere: every card has to skip the score row entirely
+    # rather than render an empty one. `rollups.get()` on a missing id is the
+    # branch under test.
+    ("board.html (nothing scored)", {
+        "active": "board", "stages": ["Staging", "Qualification"],
+        "grouped": {"Staging": [app_obj], "Qualification": []},
+        "rollups": {}, "default_stage": "Qualification",
+        "companies": [company], "resumes": [resume], "postings": [posting],
+        "sources": ["Referral"],
+    }),
+    # An undated latest reading: stale_days is None, which must render as no
+    # age at all rather than as a huge number.
+    ("board.html (undated reading)", {
+        "active": "board", "stages": ["Qualification"],
+        "grouped": {"Qualification": [app_obj]},
+        "rollups": {app_obj.id: {"latest": 60, "previous": None, "delta": None,
+                                 "count": 1, "stale_days": None}},
+        "default_stage": "Qualification",
+        "companies": [company], "resumes": [resume], "postings": [posting],
+        "sources": ["Referral"],
     }),
     ("people.html", {
         "active": "people", "people": [person], "companies": [company],
