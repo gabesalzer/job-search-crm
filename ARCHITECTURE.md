@@ -608,10 +608,18 @@ That boundary is the whole design. The privacy objection above is about the
 routine side effect of ordinary use. It is not an objection to ever forming a
 model-assisted view of a conversation. Moving that step into a session the
 user explicitly starts, with material they explicitly hand over, keeps the
-deployed product free of any LLM dependency — there is still no `anthropic` or
-`openai` package in `requirements.txt` — while leaving the useful part
+deployed product free of any LLM dependency while leaving the useful part
 available. The app stays a system of record; the judgment happens somewhere
 you can see it happening.
+
+That last sentence held completely until the Brief was added, and it no longer
+does. The Brief calls a model from inside the app, with transcripts and email
+bodies in the payload, on an explicit button press. The package-level claim
+survives — there is still no `anthropic` or `openai` package in
+`requirements.txt`, because the call goes out over the `httpx` that was already
+there — but the behavioural claim does not, and the two should not be read as
+the same claim. `## Brief` above states what actually changed, and why it was
+accepted here and still refused for scoring.
 
 The skill is also written to be *blinded* to whatever score is already on the
 record. A second opinion that has read your first one isn't one.
@@ -797,6 +805,130 @@ cannot. The one thing that arrangement gives up is compile-time agreement
 between `forecast.py`'s category and stage literals and the enums in
 `models.py` — bought back by three tests that read `app/models.py` as *text*
 and regex out the enum members.
+
+## Brief
+
+Every Application can carry a generated two-section summary — *How this
+started* and *What's happened so far* — written by a model from that
+application's own record. It is the only feature in this project that sends
+your data to a third party, and the only one whose content did not come from
+you.
+
+### This reverses a boundary the rest of this document defends
+
+The scoring section above argues at length that the app should stay free of
+any LLM dependency, and that model-assisted judgment belongs in a chat session
+the user explicitly starts. That argument was about a specific failure mode:
+the *app* silently shipping every imported Granola note to an API as a routine
+side effect of ordinary use, with no moment at which anyone chose it.
+
+The Brief keeps the part of that objection worth keeping and drops the part
+that was standing in for it. Nothing is sent on page load, on save, or on
+import. The request happens when a button is pressed, on one application, and
+the panel says in plain text what will be sent before you press it. What
+changed is not the privacy analysis — it is the recognition that "never" was
+doing the work of "not automatically," and that the two are different rules.
+
+What is genuinely given up: interview transcripts contain people who did not
+agree to have their words processed, and pressing the button sends them.
+Choosing summaries over verbatim transcripts would have cut most of that
+exposure — the packet builder supports it, the caps are per-field — and that
+was considered and declined in favour of fidelity. Recording the trade here
+because a decision made once, in a moment when fidelity was the salient thing,
+is worth being able to revisit deliberately later.
+
+### `requirements.txt` is unchanged
+
+The call is one POST with three headers, made through the `httpx` the Granola
+and Firecrawl clients already use. Adding the `anthropic` SDK would have bought
+about fifteen lines in exchange for a dependency, a version to track, and a
+transitive tree. So the literal claim made in the scoring section still holds —
+there is no `anthropic` or `openai` package in this project — but it no longer
+means what it used to mean, and it should not be read as one.
+
+### No key means no panel, and that is the common case
+
+`ANTHROPIC_API_KEY` is read from the environment and is `sync: false` in
+`render.yaml`, the same treatment `APP_PASSWORD` gets. Unset, `llm.enabled()`
+is False, the panel renders a short explanation, and nothing else in the app
+notices. That path matters more here than for the Granola or Firecrawl
+integrations, because this repository is public: for everyone who clones it,
+the no-key branch *is* the application.
+
+`BRIEF_MODEL` is likewise an env var rather than a constant, because model IDs
+get retired on a schedule this project has no reason to track. When the pinned
+one is deprecated, the fix is a dashboard edit and a restart.
+
+### Stored, not recomputed — the opposite of the Forecast, for a plain reason
+
+The Forecast section above argues hard against storing a derived value: a
+saved forecast is a snapshot that goes stale the moment anything under it
+moves, and a stale forecast looks exactly like a fresh one. All of that is
+just as true of a brief. It is stored anyway, because deriving the forecast is
+arithmetic over rows already in memory while deriving a brief is a paid API
+call over several transcripts, and recomputing it on every page load would
+bill you repeatedly to regenerate identical prose.
+
+Since the objection is conceded rather than answered, it has to be paid for
+somewhere else. `brief_generated_at` is the payment: the panel dates every
+brief, names the model that wrote it, and counts the meetings and threads that
+have been added or edited since — so a brief describing a pursuit that has
+moved says so, instead of reading as current.
+
+Staleness is measured against each row's `updated_at`, not its event date. The
+question is "has the record changed since I summarized it," and backdating a
+meeting you logged this morning is still new information.
+
+### The packet is budgeted by recency, not chronology
+
+`app/brief.py` flattens an application into plain text: identity, origin,
+people, stage history, then every meeting and thread in chronological order
+with their verbatim attached. Transcripts are capped per item and the whole
+packet is capped in total.
+
+When the total is overrun, the newest conversations keep their verbatim and
+the oldest degrade to metadata plus an explicit marker. Filling the budget in
+chronological order would do precisely the wrong thing — spend it on a
+recruiter screen from March and drop last week's onsite. Metadata is never
+what gets sacrificed; every meeting still appears with its date, type, score
+and your reason for that score.
+
+Clipping always leaves a visible marker, which matters more than the clipping
+does. A silently shortened transcript reads to a model as a conversation that
+simply ended early, and that is how a brief comes to report that a call
+"concluded without next steps" when the next steps were in the part that got
+cut.
+
+### The packet is data, and the prompt says so
+
+The text being summarized was written by recruiters and interviewers, none of
+whom knew it would reach a model. It arrives fenced in an
+`<application_packet>` tag, and the system prompt states that anything inside
+which reads like an instruction is a sentence in an email, not a directive.
+This is the one place in the app where untrusted third-party prose meets an
+instruction-following system, so the boundary is explicit rather than assumed.
+
+### Why there is no "What's next" section
+
+The obvious third question, and it was cut. There is no field on the
+Application that records an intended next step, so anything written under that
+heading would be a model inferring your plans from a transcript —
+confident-sounding, unfalsifiable, and wrong often enough to be worse than
+blank. The prompt also forbids predicting the outcome or scoring the pursuit:
+the Forecast does that from arithmetic you can audit, and the brief is the
+record, not the read.
+
+If a `next_step` column ever lands, the brief can quote it instead of
+inventing it.
+
+### `app/brief.py` imports nothing from the app
+
+Same guarantee `app/forecast.py` carries, for the same reason:
+`tests/test_brief.py` exercises the shipped module rather than a mirror of it.
+It matters more here, because this is the function that decides what leaves the
+box — a mirror that had drifted would prove the wrong function safe. The HTTP
+call lives in `app/services/llm.py`, which knows nothing about job
+applications and only takes a system prompt and messages.
 
 ## Context vs. notes on an Application
 

@@ -10,17 +10,18 @@ import pathlib
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, selectinload
 
+from .. import brief as brief_model
 from .. import forecast as forecast_model
 from .. import models
 from ..database import get_db
-from ..services import granola
+from ..services import granola, llm
 from ..services.email_parse import parse_gmail_export
 from ..services.resume_extract import extract_text
 
@@ -116,6 +117,20 @@ def _apply_meeting_quality(meeting, my_performance: str, employer_engagement: st
     """
     meeting.my_performance = _parse_score(my_performance)
     meeting.employer_engagement = _parse_score(employer_engagement)
+
+
+def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Flatten a datetime to naive UTC so mixed rows can be compared.
+
+    Form-entered dates come back naive; columns stamped by `_utcnow` come back
+    aware. Comparing the two raises TypeError, and the mix is unavoidable
+    because both kinds live in the same tables.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
@@ -222,6 +237,112 @@ def _forecast_for(app_obj: models.JobApplication) -> dict:
         resume_text=app_obj.resume.content if app_obj.resume else None,
         jd_text=app_obj.job_posting.jd_text if app_obj.job_posting else None,
     )
+
+
+def _brief_payload_for(app_obj: models.JobApplication) -> str:
+    """Flatten an Application into the plain-text packet sent to the API.
+
+    Mirrors `_forecast_for`: the ORM walking happens here, and `brief.py` stays
+    pure data-in/text-out. Unlike the forecast, this one reads nearly the whole
+    record -- transcripts, email bodies, the JD -- so it is worth being able to
+    see in one place exactly what leaves the box.
+    """
+    posting = None
+    if app_obj.job_posting:
+        posting = {
+            "title": app_obj.job_posting.title,
+            "url": app_obj.job_posting.url,
+            "location": app_obj.job_posting.location,
+            "posted_date": app_obj.job_posting.posted_date,
+            "first_seen_at": app_obj.job_posting.first_seen_at,
+            "jd_text": app_obj.job_posting.jd_text,
+        }
+    return brief_model.build_brief_payload(
+        company=app_obj.company.name if app_obj.company else None,
+        title=app_obj.title,
+        stage=app_obj.stage.value if app_obj.stage else None,
+        source=app_obj.source.value if app_obj.source else None,
+        applied_date=app_obj.applied_date,
+        context=app_obj.context,
+        notes=app_obj.notes,
+        resume_label=app_obj.resume.label if app_obj.resume else None,
+        posting=posting,
+        people=[
+            {
+                "name": p.name,
+                "role": p.role.value if p.role else None,
+                "email": p.email,
+                "is_champion": p.is_champion,
+            }
+            for p in app_obj.people
+        ],
+        stage_history=[
+            {
+                "changed_at": h.changed_at,
+                "from_stage": h.from_stage.value if h.from_stage else None,
+                "to_stage": h.to_stage.value if h.to_stage else None,
+            }
+            for h in app_obj.stage_history
+        ],
+        meetings=[
+            {
+                "meeting_date": m.meeting_date,
+                "title": m.title,
+                "meeting_type": m.meeting_type.value if m.meeting_type else None,
+                "summary": m.summary,
+                "transcript": m.transcript,
+                "notes": m.notes,
+                "score": m.score,
+                "score_reason": m.score_reason,
+                "my_performance": m.my_performance,
+                "employer_engagement": m.employer_engagement,
+            }
+            for m in app_obj.meetings
+        ],
+        email_threads=[
+            {
+                "subject": t.subject,
+                "body": t.body,
+                "participants": t.participants,
+                "started_at": t.started_at,
+                "last_message_at": t.last_message_at,
+                "notes": t.notes,
+                "score": t.score,
+                "score_reason": t.score_reason,
+            }
+            for t in app_obj.email_threads
+        ],
+    )
+
+
+def _brief_state(app_obj: models.JobApplication) -> dict:
+    """What the Brief panel needs to render, including whether it's out of date.
+
+    `stale` is the honest part. A stored brief is a photograph, and the whole
+    risk of storing one is that last month's photograph looks exactly like this
+    morning's. Anything logged against the application after the brief was
+    written makes it a description of a pursuit that has since moved, and the
+    panel says so rather than letting old prose read as current.
+
+    Comparison is against each row's `updated_at`, not its event date, because
+    the question here is "has the record changed since I summarized it" -- and
+    backdating a meeting you logged today is still new information.
+    """
+    generated_at = app_obj.brief_generated_at
+    changed_since = 0
+    if generated_at is not None:
+        cutoff = _naive_utc(generated_at)
+        for row in list(app_obj.meetings) + list(app_obj.email_threads):
+            touched = _naive_utc(row.updated_at or row.created_at)
+            if touched is not None and touched > cutoff:
+                changed_since += 1
+    return {
+        "enabled": llm.enabled(),
+        "text": app_obj.brief,
+        "generated_at": generated_at,
+        "model": app_obj.brief_model,
+        "changed_since": changed_since,
+    }
 
 
 @router.get("/")
@@ -345,7 +466,15 @@ def _activity_timeline(app_obj: models.JobApplication) -> list[dict]:
 
 
 @router.get("/applications/{application_id}/edit")
-def edit_application_page(application_id: int, request: Request, db: Session = Depends(get_db)):
+def edit_application_page(
+    application_id: int,
+    request: Request,
+    # Set by the brief refresh route when generation failed, so the reason
+    # survives the redirect. There's no flash-message machinery in this app and
+    # one query param is cheaper than adding some.
+    brief_error: str = "",
+    db: Session = Depends(get_db),
+):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
     return templates.TemplateResponse(request, "application_edit.html", {
         "active": "board",
@@ -366,7 +495,42 @@ def edit_application_page(application_id: int, request: Request, db: Session = D
         # neither is allowed to overwrite or defer to the other.
         "forecast": _forecast_for(app_obj),
         "forecast_values": FORECAST_VALUES,
+        "brief": _brief_state(app_obj),
+        "brief_error": brief_error,
     })
+
+
+@router.post("/ui/applications/{application_id}/brief/refresh")
+def refresh_brief_ui(application_id: int, db: Session = Depends(get_db)):
+    """Generate the brief and store it. The only paid call in the app.
+
+    Wired to an explicit button rather than to page load or to a save hook. A
+    brief that regenerated whenever the record changed would spend money on
+    your behalf, quietly, at a rate set by how much you happened to be editing
+    that evening -- and most edits (fixing a date, correcting a title) don't
+    change the story enough to be worth re-buying the prose.
+
+    Failures are caught and redirected back with the reason rather than raising:
+    a 500 on the edit page would hide the entire application behind a stack
+    trace because one optional panel couldn't reach an API.
+    """
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    destination = "/applications/{}/edit".format(application_id)
+    try:
+        payload = _brief_payload_for(app_obj)
+        text, model_used = llm.generate(
+            brief_model.SYSTEM_PROMPT, brief_model.build_messages(payload)
+        )
+    except llm.LLMError as exc:
+        return RedirectResponse(
+            url="{}?brief_error={}".format(destination, quote(str(exc))),
+            status_code=303,
+        )
+    app_obj.brief = text
+    app_obj.brief_model = model_used
+    app_obj.brief_generated_at = datetime.now(timezone.utc)
+    db.commit()
+    return RedirectResponse(url=destination, status_code=303)
 
 
 @router.post("/ui/applications/{application_id}/edit")

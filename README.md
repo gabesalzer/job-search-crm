@@ -63,6 +63,15 @@ A Firecrawl key is only needed to scrape JavaScript-heavy boards (LinkedIn,
 Indeed, Workday). Company career pages and Greenhouse/Lever/Ashby work without
 one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
 
+### Optional: the Brief
+
+The Brief panel on an application's edit page calls the Anthropic API. Put
+`ANTHROPIC_API_KEY=sk-ant-...` in `.env` and restart to enable it; set
+`BRIEF_MODEL` too if you want to pin a model other than the default. With no
+key the panel doesn't render at all and the rest of the app is unaffected —
+this is the only feature in the project that sends your data anywhere, it
+never fires on its own, and the button is the only thing that triggers it.
+
 ## Usage
 
 - **Postings** → *New posting*: paste a job URL and hit *Fetch details*, or fill
@@ -139,13 +148,27 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
   are the same word and different situations. The board flags any card where
   your call and the arithmetic disagree; the edit page shows the full
   four-part breakdown behind the number.
+- **Brief**: a written account of an application, in two sections — how this
+  started, and what's happened so far. It synthesizes the fields on the
+  application, its stage history, the people on it, and the full text of every
+  meeting transcript and email thread attached to it. Unlike the Forecast, it
+  is never computed on page load: it runs only when you press the button, and
+  the result is stored with the timestamp and the model that wrote it, so you
+  always know how old it is and what produced it. When activity lands after
+  the brief was written, the panel says so and offers to regenerate rather
+  than quietly serving a stale account. It deliberately stops at the present
+  tense — no prediction, no recommended next steps; that's what the Forecast
+  and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
+  no key the panel simply doesn't appear and nothing else about the app
+  changes.
 - **A second opinion**: `skills/application-viability/` is a Claude Skill —
   instructions, not code — that reads a transcript, an email thread, or an
   application's context and returns its own 0–100 score with a one-line
   reason, in the shape the score fields expect. It's deliberately *not* part
-  of the app: it runs in a chat session you start, on material you hand it,
-  so the deployed server keeps zero LLM dependencies and no transcript goes
-  anywhere as a side effect of ordinary use. It's also written to ignore any
+  of the app: it runs in a chat session you start, on material you hand it.
+  Nothing here is automatic — no transcript reaches a model as a side effect
+  of ordinary use, which is the same rule the Brief follows from the other
+  side of the boundary. It's also written to ignore any
   score you've already recorded — a second opinion that's read your first one
   isn't one. See [`skills/README.md`](./skills/README.md) to install it.
 - **Editing**: every record type (companies, postings, resumes, applications,

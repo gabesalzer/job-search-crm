@@ -1,7 +1,8 @@
 # Render Blueprint — deploys the app as one always-on web service with a
 # persistent disk for the SQLite database. Create the service by pointing
-# Render at this repo ("New +" -> "Blueprint"). Set APP_PASSWORD as a secret
-# in the dashboard (it's intentionally not stored here).
+# Render at this repo ("New +" -> "Blueprint"). Set APP_PASSWORD and
+# ANTHROPIC_API_KEY as secrets in the dashboard (intentionally not stored here —
+# this repo is public, so anything with sync: false must never gain a value).
 services:
   - type: web
     name: job-search-crm
@@ -21,5 +22,9 @@ services:
         value: gabe
       - key: APP_PASSWORD
         sync: false                    # set this yourself in the dashboard (secret)
+      - key: ANTHROPIC_API_KEY
+        sync: false                    # secret; powers the Brief panel. Unset = panel off, app still fine
+      - key: BRIEF_MODEL
+        value: claude-sonnet-5         # change here when this model ID is retired; no code change needed
       - key: PYTHON_VERSION
         value: "3.12.7"

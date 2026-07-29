@@ -379,6 +379,27 @@ class JobApplication(Base):
 
     notes = Column(Text)
 
+    # --- Generated brief -----------------------------------------------------
+    # The one part of this app whose content came from a model rather than from
+    # you. Stored rather than computed on the fly, which is the opposite of the
+    # choice made for the automated forecast a few fields up -- and the reason
+    # is cost, not principle. Deriving the forecast is arithmetic over rows
+    # already in memory; deriving this is a paid API call over several
+    # transcripts, so recomputing it on every page load would bill you
+    # repeatedly to regenerate identical prose.
+    #
+    # The tradeoff that buys is the one the forecast comment warns about: a
+    # stored brief goes stale the moment a meeting is added, and a stale brief
+    # looks exactly like a fresh one. `brief_generated_at` is what keeps that
+    # honest -- the panel dates the brief and says plainly when activity has
+    # landed since, rather than presenting old prose as current.
+    brief = Column(Text)
+    brief_generated_at = Column(DateTime)
+    # Which model wrote it. Provenance worth keeping: briefs written months
+    # apart by different models are different artifacts, and when one reads
+    # oddly the first useful question is what produced it.
+    brief_model = Column(String(128))
+
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 

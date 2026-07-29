@@ -134,6 +134,35 @@ forecast_commit = {
 
 FORECAST_VALUES = ["Pipeline", "Best Case", "Commit", "Closed"]
 
+# The Brief panel's four states. Worth covering all of them because three are
+# failure-ish paths that a happy-path-only check would never touch, and one of
+# them (no key) is what every visitor to the public repo actually sees.
+brief_written = {
+    "enabled": True,
+    "text": (
+        "## How this started\n"
+        "A referral from a former colleague, who passed the resume directly to the hiring manager.\n"
+        "\n"
+        "## What's happened so far\n"
+        "A recruiter screen established the scope, and a panel followed three weeks later.\n"
+    ),
+    "generated_at": datetime(2026, 3, 26, 8, 15),
+    "model": "claude-sonnet-5",
+    "changed_since": 0,
+}
+# Same brief, but activity has landed since it was written -- the panel has to
+# say so rather than presenting stale prose as current.
+brief_stale = {**brief_written, "changed_since": 2}
+# Key present, nothing generated yet: the empty state with the button.
+brief_empty = {
+    "enabled": True, "text": None, "generated_at": None, "model": None, "changed_since": 0,
+}
+# No ANTHROPIC_API_KEY. The whole panel switches off and must not reference
+# `generated_at`, which is None here.
+brief_off = {
+    "enabled": False, "text": None, "generated_at": None, "model": None, "changed_since": 0,
+}
+
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
     ("posting_edit.html", {"active": "postings", "posting": posting}),
@@ -145,6 +174,7 @@ cases = [
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": score_rollup,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "brief": brief_written, "brief_error": "",
     }),
     # Nothing scored yet: the rollup is None and the widget should stay hidden
     # rather than rendering an empty box -- the common state for a brand-new
@@ -159,6 +189,7 @@ cases = [
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": None, "forecast": forecast_blank,
         "forecast_values": FORECAST_VALUES,
+        "brief": brief_empty, "brief_error": "",
     }),
     # Every date null. This is the case the Dates block exists for: the fields
     # have to render as empty-but-present inputs with a "— not set" marker,
@@ -181,6 +212,10 @@ cases = [
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "score_rollup": score_rollup,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        # Same migration story as manual_forecast above: brief, brief_model and
+        # brief_generated_at are all NULL on every row predating the column,
+        # which is every application currently in the Render database.
+        "brief": brief_empty, "brief_error": "",
     }),
     # A downward move, to exercise the other branch of the trend pill.
     ("application_edit.html (cooling)", {
@@ -191,6 +226,7 @@ cases = [
         "score_rollup": {"latest": 30, "previous": 70, "delta": -40, "count": 3,
                          "stale_days": 41},
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "brief": brief_stale, "brief_error": "",
     }),
     # A single scored activity: there's no prior reading, so delta is None and
     # the trend pill has to be skipped without blowing up on the comparison.
@@ -202,6 +238,7 @@ cases = [
         "score_rollup": {"latest": 40, "previous": None, "delta": None, "count": 1,
                          "stale_days": None},
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "brief": brief_off, "brief_error": "API returned 401: invalid x-api-key",
     }),
     ("meeting_edit.html", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],

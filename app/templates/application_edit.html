@@ -128,6 +128,71 @@
 </div>
 
 <div style="max-width:720px;margin-top:1.4rem">
+  <h2 style="font-size:1rem;margin:0 0 0.4rem">Brief</h2>
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
+    How this started and what's happened since, written by a model from this application's record — the fields
+    above, the stage history, and every meeting and email thread attached to it, including transcripts and thread
+    bodies. That text is sent to the Anthropic API when you press the button, and only then. It is the one place in
+    this app where your data, and other people's words, leave the box.
+  </p>
+
+  {% if brief_error %}
+  <div class="panel" style="border-color:var(--danger,#b42318);margin-bottom:0.6rem">
+    <p style="font-size:0.82rem;margin:0"><strong>Couldn't generate.</strong> {{ brief_error }}</p>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    {% if not brief.enabled %}
+      <p style="font-size:0.82rem;margin:0">
+        No <code>ANTHROPIC_API_KEY</code> is set, so this panel is switched off. Set it in the Render dashboard
+        (or a local <code>.env</code>) and restart. Everything else in the app works without it.
+      </p>
+    {% else %}
+      {% if brief.text %}
+        <div style="font-size:0.88rem;line-height:1.5">
+          {% for line in brief.text.split('\n') %}
+            {% if line.startswith('## ') %}
+              <h3 style="font-size:0.85rem;margin:0.9rem 0 0.3rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted)">{{ line[3:] }}</h3>
+            {% elif line.startswith('# ') %}
+              <h3 style="font-size:0.85rem;margin:0.9rem 0 0.3rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted)">{{ line[2:] }}</h3>
+            {% elif line.strip() %}
+              <p style="margin:0 0 0.55rem">{{ line }}</p>
+            {% endif %}
+          {% endfor %}
+        </div>
+
+        <div style="margin-top:0.8rem;padding-top:0.6rem;border-top:1px solid var(--line);display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap">
+          <span style="font-size:0.74rem;color:var(--neutral)">
+            Written {{ brief.generated_at.strftime('%Y-%m-%d %H:%M') }} UTC{% if brief.model %} by {{ brief.model }}{% endif %}.
+          </span>
+          <form method="post" action="/ui/applications/{{ app_obj.id }}/brief/refresh" style="margin:0 0 0 auto">
+            <button type="submit" class="linkbtn">Regenerate</button>
+          </form>
+        </div>
+
+        {% if brief.changed_since %}
+        <p style="font-size:0.76rem;color:var(--muted);margin:0.5rem 0 0">
+          {{ brief.changed_since }} {% if brief.changed_since == 1 %}activity has{% else %}activities have{% endif %}
+          been added or edited since this was written, so it describes a pursuit that has moved. Regenerate to catch it up.
+        </p>
+        {% endif %}
+      {% else %}
+        <div style="display:flex;align-items:center;gap:0.8rem;flex-wrap:wrap">
+          <p style="font-size:0.82rem;margin:0;flex:1 1 20rem">
+            No brief yet. Generating one makes a single API call and stores the result — it won't refresh itself, so
+            what you read here will always be the version you asked for.
+          </p>
+          <form method="post" action="/ui/applications/{{ app_obj.id }}/brief/refresh" style="margin:0">
+            <button type="submit" class="linkbtn">Generate brief</button>
+          </form>
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<div style="max-width:720px;margin-top:1.4rem">
   <h2 style="font-size:1rem;margin:0 0 0.4rem">Forecast</h2>
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     Two independent reads. The one above is yours and is stored; this one is computed fresh on every page load
