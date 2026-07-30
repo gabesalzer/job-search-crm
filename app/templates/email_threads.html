@@ -48,7 +48,20 @@
         <input name="score" type="number" min="0" max="100" step="1" placeholder="blank if not scored">
       </div>
       <div class="field"><label>Why (optional)</label><input name="score_reason" placeholder="what moved the number"></div>
+      <div class="field">
+        <label>My performance (0–100, optional)</label>
+        <input name="my_performance" type="number" min="0" max="100" step="1" placeholder="blank if not judged">
+      </div>
+      <div class="field">
+        <label>Their engagement (0–100, optional)</label>
+        <input name="employer_engagement" type="number" min="0" max="100" step="1" placeholder="blank if not judged">
+      </div>
     </div>
+    <p style="font-size:0.74rem;color:var(--neutral);margin:0.4rem 0 0">
+      The last two are what the forecast reads; the score above is only its fallback when both are blank.
+      Engagement on a thread is mostly their behaviour around the message — who replied, how fast, whether
+      anything moved forward unprompted — rather than how warm the words are.
+    </p>
     <div style="margin-top:0.6rem"><button class="btn" type="submit">Add email thread</button></div>
   </form>
 </details>
@@ -60,6 +73,8 @@
     <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
       <strong>{{ t.subject or "Untitled thread" }}</strong>
       <span style="display:flex;gap:0.4rem;align-items:center;white-space:nowrap">
+        {% if t.my_performance is not none %}<span class="pill" title="How well what I sent landed">me {{ t.my_performance }}</span>{% endif %}
+        {% if t.employer_engagement is not none %}<span class="pill" title="How engaged they were">them {{ t.employer_engagement }}</span>{% endif %}
         {% if t.score is not none %}<span class="pill" title="Win-likelihood score{% if t.score_reason %}: {{ t.score_reason }}{% endif %}">{{ t.score }}</span>{% endif %}
         {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted)">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
       </span>

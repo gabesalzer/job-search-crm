@@ -517,41 +517,65 @@ This is the same reason Stage History exists as an append-only child rather
 than as a "previous stage" column on the Application. Both are the choice to
 keep the history rather than the latest value.
 
-The Application's own number is therefore **derived at display time**
-(`_score_rollup()` in `app/routers/ui.py`) rather than stored: latest reading,
-the change from the one before it, how many readings back it, and how old the
-latest one is. Nothing to keep in sync, no backfill when you rescore
-something, and no possibility of a stored rollup quietly disagreeing with the
-rows it summarizes.
+The Application's own number **used to be** derived at display time from these
+scores — `_score_rollup()` in `app/routers/ui.py`, which reported the latest
+reading, the change from the one before it, how many readings backed it, and
+how old the latest one was. That function is gone. Nothing was wrong with it,
+which is why the reason it went is worth recording.
 
-Note what's deliberately *not* there: an average. Averaging a 22 from a screen
-that went badly with an 80 from two weeks earlier produces a 51 describing a
-moment that never existed. The latest reading is your current position; the
-delta is the part carrying information.
+It was correct and it was redundant. It rendered on the board card and on the
+edit page directly beside the Automated Forecast, and the two answered the same
+question — *how is this going* — from different evidence, with no stated rule
+for which one won. A 36 sitting next to a 46 is not twice the information; it
+is a question you have to resolve before you can read either one, on every
+card, every time. And the disagreement only taught you something if you already
+knew which number to trust, which is precisely what the pair was supposed to
+tell you.
 
-### Where the rollup surfaces, and why it carries an age
+So the score's *input* was kept and its *arithmetic* was retired. The
+hand-entered score is now read inside the forecast, as the fallback reading for
+an activity whose `my_performance` and `employer_engagement` fields are blank
+(`forecast._rating`) — which is every activity in the database as it stands
+today, so retiring the rollup cost no signal at all. One number, six
+components, one place to look.
 
-The rollup renders in two places: the Application edit page, above the
-activity timeline, and — since it's what makes a pipeline scannable — on each
-board card. A pipeline view whose whole purpose is comparing pursuits at a
-glance is the wrong place to hide the one number that ranks them.
+One property of the rollup had to survive into the forecast: **no average.**
+Averaging a 22 from a screen that went badly with an 80 from two weeks earlier
+produces a 51 describing a moment that never existed. The rollup used the
+latest reading; `forecast.activity_quality` does the same thing for the same
+reason — it reads the most recent usable activity rather than the mean of all
+of them.
 
-Both are wrapped in a truth condition rather than a placeholder: the rollup
-returns `None` when nothing on that application has been scored, and the
-widget disappears entirely instead of rendering an empty box or a zero. Blank
-and `0` are different claims here, the same way they are on the score field
-itself.
+### Age is what outlived the rollup
 
-`stale_days` exists because a number with no age on it lies by omission. An 80
-from six weeks ago and an 80 from yesterday are the same digits describing
-completely different situations, and on a board — where a column of them gets
-scanned at once — the confident-looking old one is exactly the card that
-misleads. Past two weeks the age renders in the warning colour. It follows the
-sort key, so it measures from the event rather than from the keystroke:
-"nothing has happened here in 31 days" is the thing worth acting on, and it
-stays true no matter when you got around to typing the number in. An activity
-with no usable date on any field reports `None` rather than an age — *unknown
-when* is a different claim from *very old*.
+`_activity_age()` is all that remains, and it answers a much smaller question:
+how many days since anything actually happened on this pursuit.
+
+A number with no age on it lies by omission. An 80 from six weeks ago and an 80
+from yesterday are the same digits describing completely different situations,
+and on a board — where a column of them gets scanned at once — the
+confident-looking old one is exactly the card that misleads. The forecast
+genuinely cannot supply this, which is the whole reason the age is still here
+when the rest of the rollup isn't: the forecast reads the *content* of the
+evidence, not its recency, and a pursuit that has gone silent for a month looks
+identical to it. So the age rides alongside — in the warning colour past two
+weeks, on the board card and above the activity timeline on the edit page.
+
+It measures from the event rather than the keystroke. "Nothing has happened
+here in 31 days" is the thing worth acting on, and it stays true no matter when
+you got around to typing the number in.
+
+It counts *every* activity, not just scored ones, and that is where it parts
+company with the rollup it came from. The rollup was summarizing readings, so
+an unrated meeting was invisible to it; but a meeting that happened yesterday
+and hasn't been rated yet still means the pursuit is not quiet. The age is a
+fact about the world, not about your data entry.
+
+An application whose activities carry no usable date on any field reports
+`None` rather than an age, and the widget disappears entirely instead of
+rendering a placeholder — *unknown when* is a different claim from *very old*,
+and blank and `0` are different claims here the same way they are on the score
+field itself.
 
 ### Why `scored_at` is separate from the activity's own date
 
@@ -563,8 +587,11 @@ Keeping the two apart makes calibration analysis possible later. "Was I
 overconfident at the recruiter-screen stage?" needs to know what you believed
 **at the time you believed it**, which a single conflated date can't tell you.
 
-It is *not*, however, what the rollup orders on, and getting that wrong was a
-real bug worth recording. The rollup originally sorted by `scored_at`, falling
+It is *not*, however, the date anything downstream orders on, and getting that
+wrong was a real bug worth recording — one that predates the rollup's
+retirement and would have outlived it if it hadn't been caught, because the
+age and the forecast's "latest activity" pick both inherited the same
+convention. The rollup originally sorted by `scored_at`, falling
 back to the activity's own date — but `_apply_score()` stamps `scored_at` every
 time it writes a number and is the only writer of `score` anywhere in the app,
 so every scored row has one and the fallback could never fire. The series was
@@ -573,12 +600,13 @@ oldest typed in last, and the older conversation became the "latest" reading —
 while the activity list rendered directly beneath it on the same page sorted by
 the real dates and visibly disagreed with it.
 
-It now orders on the date the activity *happened* (`meeting_date`, or
-`last_message_at` then `started_at` for a thread), falling back to `scored_at`
-only for an activity carrying no date of its own — a fallback that can actually
-fire, since those fields are nullable. A score is a judgment *about* an event
-and belongs in the sequence where the event sits; when you formed it is a fact
-about your evening, not about the pursuit.
+Both `_activity_age()` and `forecast.activity_quality()` now key off the date
+the activity *happened* (`meeting_date`, or `last_message_at` then `started_at`
+for a thread), falling back to `scored_at` only for an activity carrying no
+date of its own — a fallback that can actually fire, since those fields are
+nullable. A score is a judgment *about* an event and belongs in the sequence
+where the event sits; when you formed it is a fact about your evening, not
+about the pursuit.
 
 ### Nothing writes the score automatically — yet
 
@@ -638,7 +666,7 @@ One distinction the code takes care with throughout: **blank is not zero.**
 Blank means no judgment has been formed; `0` means you think it's dead. Both
 are falsy in Python, so every check uses `is not None` rather than
 truthiness — otherwise a "this is over" score would silently disappear from
-the timeline and the rollup.
+the timeline and from the forecast that now reads it.
 
 ## Forecast
 
@@ -646,7 +674,7 @@ Two numbers now sit on every Application, and they are allowed to disagree.
 
 **Manual Forecast** is a picklist — `Pipeline`, `Best Case`, `Commit`,
 `Closed` — that only you write. Nothing in the app touches that column.
-**Automated Forecast** is derived on every page render from four inputs and
+**Automated Forecast** is derived on every page render from six inputs and
 stored nowhere at all. Where they diverge is the whole point of having both;
 the board draws a small `≠ Best Case` badge next to any card where your call
 and the arithmetic part ways, because that gap is a question worth a minute of
@@ -654,7 +682,8 @@ your attention and a matching pair is not.
 
 ### Why the automated one is never stored
 
-Same argument as the score rollup, one step further along. A stored forecast
+Same argument that kept the score rollup derived, one step further along. A
+stored forecast
 is a snapshot of a moment, and the moment moves — a new meeting lands, a stage
 advances, a resume gets swapped — while the stored value sits there looking
 exactly as authoritative as it did the day it was written. A stale forecast
@@ -669,35 +698,109 @@ the model think three weeks ago?" If that question ever matters, the answer is
 a separate append-only snapshot table, not a mutable column on the
 Application.
 
-### The four inputs and their weights
+### The six inputs and their weights
 
-`W_STAGE = 30`, `W_MEETINGS = 35`, `W_FIT = 20`, `W_SOURCE = 15`. They sum to
-100 deliberately, so the total reads as a rough percentage and your own
-definition — "Commit: more likely than not, 75% or higher" — means what you
-said it means when it becomes `COMMIT_AT = 75`. `BEST_CASE_AT = 40` is where
-"possible if a few things break our way" stops being defensible and the honest
-answer becomes "I don't know yet."
+`W_STAGE = 25`, `W_MEETINGS = 30`, `W_FIT = 15`, `W_EMAIL = 10`,
+`W_SOURCE = 10`, `W_CHAMPION = 10`. They sum to 100 deliberately, so the total
+reads as a rough percentage and your own definition — "Commit: more likely than
+not, 75% or higher" — means what you said it means when it becomes
+`COMMIT_AT = 75`. `BEST_CASE_AT = 40` is where "possible if a few things break
+our way" stops being defensible and the honest answer becomes "I don't know
+yet."
 
-Meetings carry the most weight because they are the only input that is
-actually about *this* pursuit going well, rather than about the conditions it
-started under. Source carries the least because it is fixed at birth and never
-learns anything.
+The split that matters is not between the six weights, it's between two kinds
+of input. Stage, fit, source and champion are all facts about the **setup** —
+every one of them is knowable before anybody has spoken to you. Meetings and
+email are the only two that report on how this pursuit is actually going.
+Meetings carry the most weight of anything for exactly that reason; source
+carries near the least because it is fixed at birth and never learns anything.
+
+The model started with four of these (stage, meetings, fit, source) and grew to
+six. Champion and email were added because they were the two things the user
+could see on a record and the arithmetic could not, which meant the number kept
+needing a mental correction — and a number you have to correct in your head is
+a number you stop reading.
+
+### Email is on its own budget, and that is the point
+
+Email threads carry the same `my_performance` / `employer_engagement` pair a
+meeting does, and are read by the same `_rating()`. What separates them is
+which weight budget they spend against: `W_EMAIL = 10` versus
+`W_MEETINGS = 30`.
+
+Two separate budgets rather than one shared pool of activity, because a shared
+pool has a specific and nasty failure mode: a scheduling reply logged after a
+panel would become the "most recent activity" and quietly *replace* the panel's
+reading. A one-line note from a coordinator would erase an hour with the hiring
+manager. Under split budgets a cold thread can drag the total down, but it can
+never overwrite what a meeting said — the meeting's 30 points are still there
+being scored on the meeting.
+
+A third of a meeting is roughly the right exchange rate. An email exchange is
+real evidence about their behaviour — who replied, how fast, whether a direct
+question actually got answered, whether they moved something forward unprompted
+— but it is thin evidence next to an hour of conversation, and weighting it
+like conversation would let inbox activity impersonate progress.
+
+### Champion is tri-state, and the third state is why
+
+`champion` on the Application is a nullable `Boolean`: `True` is "someone
+inside is spending their own capital on me", `False` is "I looked and there
+isn't one", `None` is "I haven't formed a view". Only `True` earns the 10
+points — but `True` and `False` both count as *evidence* toward confidence and
+`None` does not.
+
+That asymmetry is the design. Answering honestly with a no makes the record
+read slightly *worse* than leaving the field blank, which is the correct
+incentive: it rewards looking. It is also why this cannot be a plain non-null
+`Boolean` with a `False` default — a default would silently assert a negative
+about every record already in the database, and the app would be putting words
+in your mouth on a question nobody asked you.
+
+The bar is deliberately high. A champion is someone who will argue for you in a
+room you are not in: the hiring manager pushing recruiting to move faster, the
+referrer following up unprompted, the interviewer who went and found you a
+second conversation. It is not "I know someone there," and it is not an
+interviewer who was friendly for an hour. Set the bar low and this becomes a
+ten-point bonus for having been treated politely, which is the single easiest
+signal in a job search to mistake for progress.
+
+There is now a second thing in the schema called "champion" — `Person.
+is_champion`, which predates this — and they are different claims. That one is
+a property of an individual and travels with them across every application they
+touch; this one is a property of *this pursuit*. A friendly former colleague
+can be a champion in the first sense and do nothing whatsoever in the second.
+They are deliberately not derived from each other, and only the Application
+field is read by the forecast, because `Person.is_champion` is a `0/1` with a
+`0` default and so cannot tell "no" apart from "never asked" — exactly the
+distinction the Application field exists to preserve. If that duplication ever
+becomes annoying, the fix is to *default* the Application field from the linked
+People and let you override it, not to collapse the two.
 
 ### Stage is an input, not a cap
 
-You chose this explicitly, and it has a consequence worth naming: a
-Discovery-stage referral with excellent meetings and strong fit reaches 82 and
-reads **Commit**, while a Negotiation-stage outbound application with no
-meeting ratings reads **Pipeline**. Late stage does not floor the forecast and
-early stage does not ceiling it.
+You chose this explicitly — twice, since it came back up when the model was
+consolidated down to one number and stage was conspicuously missing from the
+list of things you said you wanted it to read. It has a consequence worth
+naming: a Discovery-stage referral with a champion, strong fit and three good
+meetings reads **Commit** at 81, while a Negotiation-stage outbound
+application with nothing else filled in does not, despite scoring 77 on what
+little it knows. Late stage does not floor the forecast and early stage does
+not ceiling it.
 
 The counter-argument is real. "More likely than not to end in an accepted
 offer" is a claim about the entire remaining path, and no amount of first-call
 warmth should let a Qualification-stage record make it. That objection is
-answered by making `STAGE_POINTS` rise steeply rather than linearly —
-Qualification is worth 4 of 30, Discovery 12, Takehome 19 — so an early
-pursuit has to be genuinely excellent on everything else to reach Commit,
-rather than merely good.
+answered twice over. First, `STAGE_POINTS` rises steeply rather than linearly —
+Qualification is worth 3 of 25, Discovery 10, Takehome 16, Executive Signoff 21
+— so an early pursuit has to be genuinely excellent on everything else to
+reach Commit rather than merely good. Second, the confidence gate below: that
+Negotiation record can't reach Commit no matter how good its setup facts look,
+because nothing has happened on it yet.
+
+`Staging` is worth 0, not a small positive. It is the pre-application stage —
+you've found the role and haven't applied — and there is no pursuit yet to
+forecast.
 
 ### What the fit index actually measures, and what it doesn't
 
@@ -707,9 +810,10 @@ It measures whether the two documents talk about the same things. It does not
 measure whether you can do the job, and it is trivially gamed by pasting the
 JD into your resume.
 
-That honesty is why it carries the smallest of the four weights, why the raw
-number is never displayed, and why `fit_band()` collapses it to `Low` /
-`Moderate` / `Strong`. A user reading "0.27" next to the word "fit" will read
+That honesty is why it carries half of what meetings do despite being the only
+component that reads the actual role, why the raw number is never displayed,
+and why `fit_band()` collapses it to `Low` / `Moderate` / `Strong`. A user
+reading "0.27" next to the word "fit" will read
 it as 27% fit, which is not what it means and not a claim this arithmetic can
 support. Three buckets is about as much resolution as word overlap honestly
 carries.
@@ -720,47 +824,108 @@ documents still share enough English to score above zero, and two documents in
 the same field rarely exceed 0.35. Points scale linearly between those bounds
 and clamp at both ends.
 
-### Two meeting columns, not one quality number
+### Two interaction columns, not one quality number
 
-`my_performance` and `employer_engagement` are separate 0–100 fields on
-`Meeting` because they answer different questions and diverge in the way that
-matters most. A strong performance met with flat engagement usually means the
-role is going somewhere else regardless of how you did; a weak performance met
-with high engagement means you have room you didn't think you had. Blending
-them at input time would erase exactly that signal.
+`my_performance` and `employer_engagement` are separate 0–100 fields, carried
+identically by `Meeting` and `EmailThread`, because they answer different
+questions and diverge in the way that matters most. A strong performance met
+with flat engagement usually means the role is going somewhere else regardless
+of how you did; a weak performance met with high engagement means you have room
+you didn't think you had. Blending them at input time would erase exactly that
+signal.
 
 They are blended at *read* time, weighted `ENGAGEMENT_WEIGHT = 0.6` against
 `PERFORMANCE_WEIGHT = 0.4`, because their interest in you predicts the outcome
 better than your opinion of yourself does. Quality is read off the most recent
-scored meeting only — an early bad call that has since been superseded is
-history, not forecast — with a small depth bonus (`DEPTH_POINTS_PER_MEETING =
-2`, capped at `MAX_DEPTH_POINTS = 7`) for having got several meetings deep at
-all.
+usable activity only — an early bad call that has since been superseded is
+history, not forecast — with a small depth bonus for having got several
+interactions deep at all: `DEPTH_POINTS_PER_MEETING = 2` up to
+`MAX_MEETING_DEPTH = 6`, leaving `MAX_MEETING_QUALITY = 24` of the 30 for the
+reading itself, and `DEPTH_POINTS_PER_THREAD = 1` up to `MAX_EMAIL_DEPTH = 2`
+against email's 10.
+
+On a thread, "engagement" is mostly about their behaviour *around* the message
+rather than the words in it: who replied, how fast, whether they moved
+something forward unprompted, whether the answer to a direct question was
+actually an answer. A four-day one-line reply from a coordinator is a low
+engagement reading no matter how warm the words in it are.
+
+`_rating()` falls back to the hand-entered `score` when both decomposed fields
+are blank, which is what let the score rollup be retired without losing
+anything. The precedence is: the blend of both if both are present, whichever
+half is present if only one is, then the flat `score`, then no reading at all.
+The decomposed pair always wins, because `score` and the pair on the same
+activity are the same judgment expressed twice and the more detailed expression
+is the better one.
 
 These two fields deliberately carry no `*_at` stamp, unlike `score`.
-`scored_at` exists because the rollup has to order readings against each other
-over time; these are read only off the latest meeting, which is already
-ordered by `meeting_date`. A timestamp nobody reads is a column that can only
-rot.
+`scored_at` exists because the score used to have to order readings against
+each other over time; these are read only off the latest activity, which is
+already ordered by its own date. A timestamp nobody reads is a column that can
+only rot.
 
 The blank-is-not-zero rule applies here as it does to `score`, and applies
 harder: a call where you didn't rate your own performance and a call you rated
-0 are opposite claims, and the model reads them as such.
+0 are opposite claims, and the model reads them as such. There is one edge this
+produces that is worth knowing about rather than papering over — a 0-rated
+thread earns its depth point while contributing no quality points, so it can
+nudge the raw `total` up while pulling `total_known` down. That is coherent:
+something did happen, and it went badly. `tests/test_forecast.py` pins it
+deliberately so it can't drift into a silent bug.
 
-### Confidence rides alongside the category
+### Two totals: `total` and `total_known`
 
-`confidence` counts how many of the four components had real data behind them
+`total` is the raw sum of the six components out of 100. `total_known` is a
+weighted average over only the components that actually had something to say,
+rescaled back to 100. The band — Commit / Best Case / Pipeline — is computed
+off `total_known`, and this was not the original choice.
+
+Banding off the raw `total` stopped surviving the day the model went from four
+components to six. Champion and email did not exist the day before; every
+record already in the database would have dropped roughly twenty points
+overnight, and read as a collapse in prospects rather than as two new empty
+columns. A raw total cannot tell those two apart, because it is answering two
+questions at once — *how good does this look* and *how much of the form did you
+fill in* — and reporting a single number for both.
+
+So they were separated. `total_known` measures quality alone; `confidence`
+measures completeness alongside it. One number per question, rather than one
+number doing both badly. The raw `total` is still computed and still shown, as
+a secondary pill next to the points actually in play, because it is the honest
+denominator when you want to know how much of the model is even running.
+
+### Confidence rides alongside the category, and gates it
+
+`confidence` counts how many of the six components had real data behind them
 and is reported *separately* from the band, never folded into it. A Pipeline
 that means "I have nothing to go on" and a Pipeline that means "I have plenty
 to go on and it's bad" are the same category and completely different
-situations. Values are `none` (nothing), `thin` (one or two components), and
-`ok` (three or four); `high` is reserved for the two closed short-circuits,
-where there is nothing left to be uncertain about.
+situations. Values are `none` (nothing), `thin` (one or two components), `ok`
+(three or four), and `high` (five or six, and the two closed short-circuits
+where there is nothing left to be uncertain about).
 
 Stage counts toward confidence only once the pursuit is past Qualification.
 Every application is *born* at Qualification (`models.DEFAULT_STAGE`) — that
 is a fact about a column default, not something anybody learned — and counting
 it would let a brand-new empty record claim it had evidence.
+
+Two rules then bend confidence and the category toward interaction evidence,
+and they exist to close `total_known`'s one real failure mode.
+
+**Nothing is above `thin` until something happened.** Stage, source, fit and
+champion are all setup facts. A record can satisfy all four while the app has
+no idea how a single conversation went, and reporting that as "ok evidence" is
+how the Condor application came to sit at 46 with a confident-looking label and
+an empty meetings column. If neither a meeting nor an email produced a reading,
+confidence is pinned at `thin` at best.
+
+**Commit requires that something happened.** A Negotiation-stage outbound
+application with nothing else filled in takes 27 of the 35 points its answered
+components can offer, which is a `total_known` of 77 — a near-perfect score
+built entirely out of facts knowable before anyone spoke to you. Banding off
+`total_known` alone would call that Commit. It doesn't:
+`thin` confidence demotes Commit to Best Case. A record cannot claim "more
+likely than not" on setup alone.
 
 ### Closed stages short-circuit
 

@@ -39,6 +39,20 @@ PERSON_ROLE_VALUES = [r.value for r in models.PersonRole]
 APPLICATION_SOURCE_VALUES = [s.value for s in models.ApplicationSource]
 FORECAST_VALUES = [f.value for f in models.ForecastCategory]
 
+# The forecast's component budgets, read straight off the model so the
+# breakdown panel can print "12.0/25" without the denominators being retyped
+# into a template. They were hardcoded there once and went stale the moment the
+# weights were rebalanced, which turned an explanation of the number into a
+# contradiction of it.
+FORECAST_WEIGHTS = {
+    "stage": forecast_model.W_STAGE,
+    "meetings": forecast_model.W_MEETINGS,
+    "email": forecast_model.W_EMAIL,
+    "fit": forecast_model.W_FIT,
+    "source": forecast_model.W_SOURCE,
+    "champion": forecast_model.W_CHAMPION,
+}
+
 
 def _get_or_404(db: Session, model, obj_id: int):
     obj = db.get(model, obj_id)
@@ -100,9 +114,14 @@ def _apply_score(obj, raw_score: Optional[str], reason: str) -> None:
     obj.score_reason = (reason or "").strip() or None
 
 
-def _apply_meeting_quality(meeting, my_performance: str, employer_engagement: str) -> None:
-    """Write the two halves of meeting quality: how well you did, and how
+def _apply_activity_quality(obj, my_performance: str, employer_engagement: str) -> None:
+    """Write the two halves of an activity's quality: how well you did, and how
     interested they were.
+
+    Takes a Meeting or an EmailThread. They carry the same pair of columns with
+    the same meaning, and the forecast reads one shape over both, so the writer
+    is shared too -- a second near-identical function is exactly how the two
+    would drift apart.
 
     Reuses _parse_score because these share its scale and its rules exactly --
     0-100, clamped rather than rejected, blank meaning "no judgment formed"
@@ -110,13 +129,13 @@ def _apply_meeting_quality(meeting, my_performance: str, employer_engagement: st
     defaulted: a call where you didn't rate your own performance and a call you
     rated 0 are opposite claims, and the forecast reads them as such.
 
-    Unlike `score` these carry no `*_at` stamp. `scored_at` exists because the
-    rollup has to order readings against each other over time; these two are
-    read only off the most recent meeting, which is already ordered by
-    `meeting_date`. A timestamp nobody reads is a column that can only rot.
+    Unlike `score` these carry no `*_at` stamp. `scored_at` exists because
+    score calibration later needs to know when a judgment was formed; these two
+    are attributes of the activity, read at the activity's own date. A
+    timestamp nobody reads is a column that can only rot.
     """
-    meeting.my_performance = _parse_score(my_performance)
-    meeting.employer_engagement = _parse_score(employer_engagement)
+    obj.my_performance = _parse_score(my_performance)
+    obj.employer_engagement = _parse_score(employer_engagement)
 
 
 def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
@@ -133,109 +152,99 @@ def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
     return value
 
 
-def _score_rollup(app_obj: models.JobApplication) -> Optional[dict]:
-    """Derive "where does this application stand" from its scored activities.
+def _activity_age(app_obj: models.JobApplication) -> Optional[int]:
+    """Days since the most recent thing that actually happened on this pursuit.
 
-    Computed at display time from the Meeting/EmailThread rows rather than
-    stored on the Application. Nothing to keep in sync, and the rollup can
-    never disagree with the rows it summarizes -- rescore a meeting and the
-    application's number moves on the next page load, with no backfill.
+    What survives of the old score rollup. That function derived a second
+    number -- "where does this application stand" -- from the hand-entered
+    `score` on each activity, and it sat next to the automated forecast with no
+    stated rule for which one won. Two numbers answering the same question is a
+    tax on every glance, and the disagreement between them only taught you
+    something if you already knew which to trust. The score itself did not
+    disappear: it moved *inside* the forecast as the fallback reading for an
+    activity whose performance and engagement fields are blank. See
+    `forecast._rating`.
 
-    Ordering uses the date the activity *happened* -- `meeting_date` for a
-    meeting, `last_message_at` (then `started_at`) for a thread -- and falls
-    back to `scored_at` only when the activity carries no date of its own.
+    The age is the one thing the rollup carried that the forecast genuinely
+    cannot. A number with no age on it lies by omission -- an 80 from six weeks
+    ago and an 80 from yesterday are the same digits describing completely
+    different situations -- and that matters most on the board, where a column
+    of them gets scanned at once and the confident-looking old one is exactly
+    the card that misleads.
 
-    This used to sort on `scored_at` first, and that was wrong. `scored_at` is
-    stamped by _set_score() the instant a number is saved, and since _set_score
-    is the only writer of `score` anywhere in the app, every scored activity
-    has one; the `or meeting_date` fallback could never fire. The rollup was
-    therefore ordered entirely by data-entry time. Log two meetings in one
-    sitting, oldest last, and the older conversation became "latest" -- while
-    the activity list rendered directly beneath it on the same page sorted by
-    the real dates and visibly disagreed. A score is a judgment *about* an
-    event, and it belongs in the sequence where the event sits; when you formed
-    it is a fact about your evening, not about the pursuit.
+    Measured from the date the activity *happened* (`meeting_date` for a
+    meeting, `last_message_at` then `started_at` for a thread), falling back to
+    `scored_at` only when the activity carries no date of its own. An earlier
+    version of this measured from `scored_at` first, which meant it reported
+    how long ago you did data entry rather than how long the pursuit had been
+    quiet -- a fact about your evening, not about the job.
 
-    `stale_days` is how old that latest reading is, and it's there because a
-    number with no age on it lies by omission: an 80 from six weeks ago and an
-    80 from yesterday are the same digits describing completely different
-    situations. That matters most on the board, where a column of them gets
-    scanned at once and the confident-looking old one is exactly the card that
-    misleads. Following the sort key, it now measures from the event rather
-    than from the keystroke -- "nothing has happened here in 21 days" is the
-    thing worth acting on. It's None when the latest reading has no usable date
-    at all, which is a different claim from "today".
+    Counts every activity, not just rated ones. "Nothing has happened in 21
+    days" is true whether or not you got around to rating what happened.
 
-    Returns None when nothing has been scored, so the template can stay quiet
-    instead of rendering an empty widget.
+    Returns None when there is no activity, or none of it carries a usable
+    date -- which is a different claim from "today".
     """
-    def _sortable(dt: Optional[datetime]) -> datetime:
-        # Form-entered dates come back naive; `scored_at` is stamped in UTC and
-        # comes back aware. Comparing the two raises, so flatten to naive UTC
-        # before sorting rather than letting the mix reach the comparison.
-        if dt is None:
-            return datetime.min
-        if dt.tzinfo is not None:
-            return dt.astimezone(timezone.utc).replace(tzinfo=None)
-        return dt
-
-    scored: list[tuple[datetime, int]] = []
+    dates = []
     for m in app_obj.meetings:
-        if m.score is not None:
-            scored.append((_sortable(m.meeting_date or m.scored_at), m.score))
+        dates.append(_naive_utc(m.meeting_date or m.scored_at))
     for t in app_obj.email_threads:
-        if t.score is not None:
-            scored.append((
-                _sortable(t.last_message_at or t.started_at or t.scored_at),
-                t.score,
-            ))
-    if not scored:
+        dates.append(_naive_utc(t.last_message_at or t.started_at or t.scored_at))
+    usable = [d for d in dates if d is not None]
+    if not usable:
         return None
-    scored.sort(key=lambda row: row[0])
-    latest_at, latest = scored[-1]
-    previous = scored[-2][1] if len(scored) > 1 else None
-    # datetime.min is the sentinel _sortable() returns for an activity with no
-    # date on any of its fields. Subtracting from it would report an age in the
-    # hundreds of thousands of days, so an undated reading reports no age at all.
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    stale_days = (
-        None if latest_at == datetime.min else max((now - latest_at).days, 0)
-    )
-    return {
-        "latest": latest,
-        "previous": previous,
-        "delta": None if previous is None else latest - previous,
-        "count": len(scored),
-        "stale_days": stale_days,
-    }
+    return max((now - max(usable)).days, 0)
 
 
 def _forecast_for(app_obj: models.JobApplication) -> dict:
-    """Gather the four Automated Forecast inputs off an Application.
+    """Gather the six Forecast inputs off an Application.
 
     This is the only function in the app that knows both the ORM and the
     forecast model, and it deliberately does nothing but read fields. All the
     judgment lives in app/forecast.py, which imports no SQLAlchemy and is
     therefore directly exercised by tests rather than mirrored in them.
 
-    Like the score rollup, this runs at display time and stores nothing. A
-    forecast column would be a snapshot that quietly rots the moment you rescore
-    a meeting or swap the resume, and the failure mode of a stale forecast is
-    the worst kind: it looks exactly like a fresh one.
+    Like the score rollup it replaced, this runs at display time and stores
+    nothing. A forecast column would be a snapshot that quietly rots the moment
+    you rescore a meeting or swap the resume, and the failure mode of a stale
+    forecast is the worst kind: it looks exactly like a fresh one.
+
+    Every date goes through `_naive_utc`. The forecast picks the latest activity
+    with `max()` over the `when` values, and meeting dates arrive naive (typed
+    into a form) while thread timestamps can arrive aware (stamped by
+    `_utcnow`). Comparing the two raises TypeError, and because the raise would
+    happen inside a template render it would take the whole application page
+    down rather than degrade. Flattening here is cheap and total.
+
+    `score` is passed alongside the decomposed pair rather than instead of it.
+    The forecast prefers performance/engagement and falls back to the
+    hand-entered score only when both are blank -- which is every activity in
+    the database as it stands, so dropping it here would have made the model
+    blind to the entire existing history on the day it shipped.
     """
+    def _activity(obj, when):
+        return {
+            "when": _naive_utc(when),
+            "my_performance": obj.my_performance,
+            "employer_engagement": obj.employer_engagement,
+            "score": obj.score,
+        }
+
     return forecast_model.automated_forecast(
         stage=app_obj.stage.value if app_obj.stage else None,
         source=app_obj.source.value if app_obj.source else None,
         meetings=[
-            {
-                "when": m.meeting_date,
-                "my_performance": m.my_performance,
-                "employer_engagement": m.employer_engagement,
-            }
+            _activity(m, m.meeting_date or m.scored_at)
             for m in app_obj.meetings
+        ],
+        threads=[
+            _activity(t, t.last_message_at or t.started_at or t.scored_at)
+            for t in app_obj.email_threads
         ],
         resume_text=app_obj.resume.content if app_obj.resume else None,
         jd_text=app_obj.job_posting.jd_text if app_obj.job_posting else None,
+        champion=app_obj.champion,
     )
 
 
@@ -355,18 +364,18 @@ def root():
 # --------------------------------------------------------------------------- #
 @router.get("/board")
 def board(request: Request, db: Session = Depends(get_db)):
-    # The score rollup reads every scored meeting and thread on each card, and
-    # the forecast additionally reads the resume and the posting. Load all four
-    # up front: without this the board issues four extra queries per application
-    # just to render the numbers, and that cost grows with the pipeline.
+    # The forecast reads every meeting and thread on each card plus the resume
+    # and the posting. Load all four up front: without this the board issues
+    # four extra queries per application just to render the numbers, and that
+    # cost grows with the pipeline.
     #
     # Pulling full resume and JD text for a board view looks expensive. It
     # mostly isn't -- selectinload issues one query per relationship for the
     # whole page, not per card, and resumes are shared across applications so
     # the distinct set is small. The fit index is recomputed per card on every
-    # load rather than cached, which is the same trade the score rollup makes:
-    # a derived number that can never be stale beats one that's cheap to read
-    # and quietly wrong.
+    # load rather than cached, which is the trade the whole forecast makes: a
+    # derived number that can never be stale beats one that's cheap to read and
+    # quietly wrong.
     apps = (
         db.query(models.JobApplication)
         .options(
@@ -384,14 +393,15 @@ def board(request: Request, db: Session = Depends(get_db)):
         "active": "board",
         "stages": STAGE_VALUES,
         "grouped": grouped,
-        # Same derivation the Application page uses, keyed by id so a card can
-        # look up its own without the template calling into Python.
-        "rollups": {a.id: _score_rollup(a) for a in apps},
-        # Automated Forecast, same shape and same keying. The card shows only
-        # the category; the reasoning behind it lives on the edit page, because
-        # a board is for scanning and a four-part breakdown on every card would
+        # The one number, keyed by id so a card can look up its own without the
+        # template calling into Python. The card shows the score, the category
+        # and the age; the six-part breakdown behind it lives on the edit page,
+        # because a board is for scanning and a breakdown on every card would
         # bury the one thing you came here to see.
         "forecasts": {a.id: _forecast_for(a) for a in apps},
+        # Rides alongside the score because the forecast has no sense of age.
+        # Same keying.
+        "activity_ages": {a.id: _activity_age(a) for a in apps},
         # The board's stage picker defaults to the same stage the column does.
         # Leaving it on whatever happens to be first in the list would quietly
         # make Staging the default for every new record.
@@ -488,13 +498,18 @@ def edit_application_page(
         .order_by(models.JobPosting.last_seen_at.desc())
         .all(),
         "activity": _activity_timeline(app_obj),
-        "score_rollup": _score_rollup(app_obj),
+        "activity_age": _activity_age(app_obj),
         # The two forecasts, side by side and deliberately independent. The
         # automated one is derived here and stored nowhere; the manual one is a
         # column only you write. Where they disagree is the interesting part, so
         # neither is allowed to overwrite or defer to the other.
         "forecast": _forecast_for(app_obj),
         "forecast_values": FORECAST_VALUES,
+        # Component budgets, passed rather than written into the template. The
+        # breakdown prints "12.0/30" next to each component, and hardcoding the
+        # denominators there means a weights change in forecast.py silently
+        # turns the panel into a lie -- which had already happened once.
+        "forecast_weights": FORECAST_WEIGHTS,
         "brief": _brief_state(app_obj),
         "brief_error": brief_error,
     })
@@ -550,6 +565,7 @@ def update_application_ui(
     context: str = Form(""),
     source: str = Form(""),
     manual_forecast: str = Form(""),
+    champion: str = Form(""),
     db: Session = Depends(get_db),
 ):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
@@ -576,6 +592,12 @@ def update_application_ui(
     app_obj.manual_forecast = (
         models.ForecastCategory(manual_forecast) if manual_forecast else None
     )
+    # Tri-state, arriving as a string because an HTML form has no way to send
+    # a real None. Empty string is "not assessed" and stays NULL; "yes" and
+    # "no" are both real answers. This cannot use a bare truthiness test --
+    # `bool("no")` is True, and the whole point of the column is that a
+    # deliberate no is different from a blank.
+    app_obj.champion = {"yes": True, "no": False}.get(champion)
 
     new_stage = models.Stage(stage)
     if new_stage != app_obj.stage:
@@ -1129,7 +1151,7 @@ def create_meeting_ui(
         granola_link=granola_link or None,
     )
     _apply_score(meeting, score, score_reason)
-    _apply_meeting_quality(meeting, my_performance, employer_engagement)
+    _apply_activity_quality(meeting, my_performance, employer_engagement)
     db.add(meeting)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
@@ -1183,7 +1205,7 @@ def update_meeting_ui(
     meeting.granola_note_id = granola_note_id or None
     meeting.granola_link = granola_link or None
     _apply_score(meeting, score, score_reason)
-    _apply_meeting_quality(meeting, my_performance, employer_engagement)
+    _apply_activity_quality(meeting, my_performance, employer_engagement)
     db.commit()
     return RedirectResponse(url="/meetings", status_code=303)
 
@@ -1372,6 +1394,8 @@ def create_email_thread_ui(
     notes: str = Form(""),
     score: str = Form(""),
     score_reason: str = Form(""),
+    my_performance: str = Form(""),
+    employer_engagement: str = Form(""),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
@@ -1401,6 +1425,7 @@ def create_email_thread_ui(
         notes=notes or None,
     )
     _apply_score(thread, score, score_reason)
+    _apply_activity_quality(thread, my_performance, employer_engagement)
     thread.people = resolved_people
     db.add(thread)
     db.commit()
@@ -1432,6 +1457,8 @@ def update_email_thread_ui(
     notes: str = Form(""),
     score: str = Form(""),
     score_reason: str = Form(""),
+    my_performance: str = Form(""),
+    employer_engagement: str = Form(""),
     file: UploadFile = File(None),
     db: Session = Depends(get_db),
 ):
@@ -1464,6 +1491,7 @@ def update_email_thread_ui(
     thread.last_message_at = _parse_dt(last_message_at) or parsed["last_message_at"]
     thread.notes = notes or None
     _apply_score(thread, score, score_reason)
+    _apply_activity_quality(thread, my_performance, employer_engagement)
     db.commit()
     return RedirectResponse(url="/email-threads", status_code=303)
 

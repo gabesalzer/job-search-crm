@@ -80,6 +80,19 @@ def m(perf=None, eng=None, when=None):
     return {"when": when, "my_performance": perf, "employer_engagement": eng}
 
 
+def th(perf=None, eng=None, when=None):
+    """An email thread as the ORM adapter hands it over. Deliberately the same
+    shape as a meeting -- one _rating() reads both, and the only thing that
+    distinguishes them is which weight budget they are scored against."""
+    return {"when": when, "my_performance": perf, "employer_engagement": eng}
+
+
+def hand(score, when=None):
+    """An activity carrying only the hand-entered win-likelihood score, with no
+    decomposed read. This is every row in the database as it stands today."""
+    return {"when": when, "score": score}
+
+
 # --------------------------------------------------------------------------- #
 # Fit index
 # --------------------------------------------------------------------------- #
@@ -143,30 +156,30 @@ def test_identical_text_does_not_break_the_cosine():
 # Meeting quality
 # --------------------------------------------------------------------------- #
 def test_no_meetings_and_no_ratings_both_read_as_no_signal():
-    assert f.meeting_quality([]) is None
-    assert f.meeting_quality([m(), m()]) is None
+    assert f.activity_quality([]) is None
+    assert f.activity_quality([m(), m()]) is None
 
 
 def test_a_zero_rating_is_a_reading_not_an_absence():
     """The invariant that's easiest to break: `if perf` instead of
     `if perf is not None` would make "that went terribly" indistinguishable from
     "I haven't judged it", and the two point in opposite directions."""
-    assert f.meeting_quality([m(perf=0, eng=0)]) == 0.0
+    assert f.activity_quality([m(perf=0, eng=0)]) == 0.0
 
 
 def test_one_rated_half_is_used_alone_rather_than_averaged_against_nothing():
     """Rating only their engagement is a common and legitimate half-answer.
     Treating the blank half as 0 would halve the score for a meeting you
     described accurately."""
-    assert f.meeting_quality([m(eng=80)]) == 80.0
-    assert f.meeting_quality([m(perf=80)]) == 80.0
+    assert f.activity_quality([m(eng=80)]) == 80.0
+    assert f.activity_quality([m(perf=80)]) == 80.0
 
 
 def test_engagement_outweighs_performance():
     """Their interest is the thing that produces an offer; your performance is a
     leading indicator of interest they haven't shown yet."""
-    theirs = f.meeting_quality([m(perf=0, eng=100)])
-    mine = f.meeting_quality([m(perf=100, eng=0)])
+    theirs = f.activity_quality([m(perf=0, eng=100)])
+    mine = f.activity_quality([m(perf=100, eng=0)])
     assert theirs > mine
     assert theirs == f.ENGAGEMENT_WEIGHT * 100
     assert mine == f.PERFORMANCE_WEIGHT * 100
@@ -178,21 +191,21 @@ def test_quality_reads_the_most_recent_meeting_not_an_average():
     the pursuit actually stands."""
     old = m(perf=90, eng=90, when=1000)
     new = m(perf=20, eng=20, when=2000)
-    assert f.meeting_quality([old, new]) == 20.0
-    assert f.meeting_quality([new, old]) == 20.0  # list order must not matter
+    assert f.activity_quality([old, new]) == 20.0
+    assert f.activity_quality([new, old]) == 20.0  # list order must not matter
 
 
 def test_undated_meetings_do_not_raise_when_picking_the_latest():
     """Regression: sorting on a (has_date, date) tuple compares None against
     None as soon as two meetings are undated, which raises TypeError. Meeting
     dates are nullable, so this is reachable from the UI."""
-    assert f.meeting_quality([m(perf=40), m(perf=60)]) == 60.0
+    assert f.activity_quality([m(perf=40), m(perf=60)]) == 60.0
 
 
 def test_a_dated_meeting_wins_over_an_undated_one():
     """An undated row carries no claim about when it happened, so it must not
     displace a meeting that does."""
-    assert f.meeting_quality([m(perf=10, when=500), m(perf=90)]) == 10.0
+    assert f.activity_quality([m(perf=10, when=500), m(perf=90)]) == 10.0
 
 
 # --------------------------------------------------------------------------- #
@@ -205,7 +218,7 @@ def test_an_empty_application_has_nothing_to_say_and_says_so():
     out = f.automated_forecast(stage="Qualification", source=None)
     assert out["category"] == f.PIPELINE
     assert out["confidence"] == "none"
-    assert out["total"] == 4
+    assert out["total"] == f.STAGE_POINTS["Qualification"]
 
 
 def test_a_strong_late_stage_pursuit_reaches_commit():
@@ -217,7 +230,7 @@ def test_a_strong_late_stage_pursuit_reaches_commit():
         jd_text=MATCHING_JD,
     )
     assert out["category"] == f.COMMIT
-    assert out["total"] >= f.COMMIT_AT
+    assert out["total_known"] >= f.COMMIT_AT
     assert out["confidence"] == "ok"
 
 
@@ -311,10 +324,13 @@ def test_every_result_carries_the_full_contract():
         f.automated_forecast(stage="Discovery", source="Referral",
                              meetings=[m(perf=50, eng=50)]),
     ]:
-        assert set(out) == {"category", "total", "components", "confidence", "reason"}
+        assert set(out) == {"category", "total", "total_known", "components",
+                            "confidence", "reason"}
         assert out["category"] in {f.COMMIT, f.BEST_CASE, f.PIPELINE}
         assert isinstance(out["total"], int)
+        assert isinstance(out["total_known"], int)
         assert 0 <= out["total"] <= 100
+        assert 0 <= out["total_known"] <= 100
         assert out["confidence"] in {"none", "thin", "ok", "high"}
         assert out["reason"] and out["reason"][-1] in ".!"
 
@@ -342,14 +358,17 @@ def test_components_sum_to_the_total():
         resume_text=RESUME, jd_text=MATCHING_JD,
     )
     c = out["components"]
-    assert round(c["stage"] + c["meetings"] + c["fit"] + c["source"]) == out["total"]
+    assert round(c["stage"] + c["meetings"] + c["email"] + c["fit"]
+                 + c["source"] + c["champion"]) == out["total"]
 
 
 def test_weights_sum_to_one_hundred():
     """What makes the total readable as a rough percentage, which is what makes
     the user's "75% or higher" definition mean what he said."""
-    assert f.W_STAGE + f.W_MEETINGS + f.W_FIT + f.W_SOURCE == 100
-    assert f.MAX_QUALITY_POINTS + f.MAX_DEPTH_POINTS == f.W_MEETINGS
+    assert (f.W_STAGE + f.W_MEETINGS + f.W_EMAIL + f.W_FIT
+            + f.W_SOURCE + f.W_CHAMPION) == 100
+    assert f.MAX_MEETING_QUALITY + f.MAX_MEETING_DEPTH == f.W_MEETINGS
+    assert f.MAX_EMAIL_QUALITY + f.MAX_EMAIL_DEPTH == f.W_EMAIL
 
 
 def test_no_input_combination_can_exceed_one_hundred():
@@ -372,7 +391,7 @@ def test_depth_credit_is_capped():
         stage="Discovery", source=None,
         meetings=[m(perf=50, eng=50, when=i) for i in range(20)],
     )
-    assert many["total"] - one["total"] <= f.MAX_DEPTH_POINTS
+    assert many["total"] - one["total"] <= f.MAX_MEETING_DEPTH
 
 
 # --------------------------------------------------------------------------- #
@@ -408,6 +427,248 @@ def test_sources_cover_every_source_in_models():
     block = models_src.split("class ApplicationSource", 1)[1].split("\nclass ", 1)[0]
     declared = set(re.findall(r'^\s{4}[A-Z_]+ = "([^"]+)"', block, re.M))
     assert declared <= set(f.SOURCE_POINTS), declared - set(f.SOURCE_POINTS)
+
+
+# --------------------------------------------------------------------------- #
+# The consolidation: champion, email, and the hand-entered score as a fallback
+#
+# These cover what changed when the win-likelihood rollup and the automated
+# forecast were merged into one number. The rollup used to be a second opinion
+# sitting next to this one with no stated rule for which won; the merge kept its
+# input and dropped its arithmetic.
+# --------------------------------------------------------------------------- #
+def test_champion_is_tri_state_and_only_true_earns():
+    """False and None both score zero points and mean opposite things. False is
+    a judgment -- you looked, and nobody inside is spending capital on you. None
+    is the absence of one. Collapsing them with a truthiness check would let an
+    unanswered field read as a considered negative."""
+    base = dict(stage="Discovery", source="Referral", meetings=[m(perf=60, eng=60)])
+    yes = f.automated_forecast(champion=True, **base)
+    no = f.automated_forecast(champion=False, **base)
+    unknown = f.automated_forecast(champion=None, **base)
+
+    assert yes["components"]["champion"] == f.CHAMPION_POINTS
+    assert no["components"]["champion"] == 0.0
+    assert unknown["components"]["champion"] == 0.0
+    assert yes["total"] - no["total"] == f.CHAMPION_POINTS
+
+
+def test_a_false_champion_counts_as_evidence_and_an_unknown_one_does_not():
+    """The point of keeping them apart. Both earn nothing, but False widens the
+    denominator -- it is a fact about the pursuit -- so it drags `total_known`
+    down, while None simply leaves the component out of the question."""
+    base = dict(stage="Discovery", source="Referral", meetings=[m(perf=60, eng=60)])
+    no = f.automated_forecast(champion=False, **base)
+    unknown = f.automated_forecast(champion=None, **base)
+
+    assert no["components"]["available"] > unknown["components"]["available"]
+    assert no["total_known"] < unknown["total_known"]
+    assert no["total"] == unknown["total"]
+
+
+def test_email_threads_feed_their_own_budget_rather_than_the_meeting_one():
+    """The old rollup let one email wholesale replace a meeting's reading,
+    because it sorted both into a single list and took the last. A thread is
+    worth a third of a meeting here and cannot touch the meeting component."""
+    without = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=70, eng=70)])
+    with_ = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=70, eng=70)],
+        threads=[th(perf=80, eng=80)])
+
+    assert without["components"]["email"] == 0.0
+    assert with_["components"]["email"] > 0.0
+    assert with_["components"]["meetings"] == without["components"]["meetings"]
+    assert with_["components"]["email"] <= f.W_EMAIL
+
+
+def test_a_cold_email_cannot_erase_a_warm_meeting():
+    """Same invariant stated as the failure it exists to prevent. A dead-quiet
+    thread after a strong panel should cool the read, not overwrite it."""
+    warm = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=90, eng=90)])
+    chilled = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=90, eng=90)],
+        threads=[th(perf=0, eng=0)])
+
+    assert chilled["total_known"] < warm["total_known"]
+    assert chilled["components"]["meetings"] == warm["components"]["meetings"]
+
+
+def test_the_hand_entered_score_is_read_when_the_decomposed_fields_are_blank():
+    """Every activity in the database today has a `score` and no performance or
+    engagement read. The merge had to keep them worth something or the model
+    would have gone blind on the entire existing history."""
+    out = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[hand(70)])
+    assert out["components"]["quality"] == 70.0
+    assert out["components"]["scored_meetings"] == 1
+
+
+def test_the_decomposed_read_wins_over_the_hand_entered_score():
+    """They are the same judgment expressed twice, on different scales -- score
+    answers "will this end Closed Won", the blend answers "how did this go".
+    Averaging them would count one opinion twice and mix the two scales while
+    doing it, so the richer read simply wins."""
+    both = {"when": None, "score": 10, "my_performance": 90,
+            "employer_engagement": 90}
+    assert f._rating(both) == 90.0
+
+    out = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[both])
+    decomposed_only = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=90, eng=90)])
+    assert out["components"]["quality"] == decomposed_only["components"]["quality"]
+
+
+def test_one_decomposed_half_still_beats_the_hand_entered_score():
+    """Precedence runs blend, then whichever half is present, then score. A
+    single rated half is a direct read of the interaction; the score is a
+    prediction about the whole pursuit, which is a different question."""
+    assert f._rating({"score": 10, "employer_engagement": 80,
+                      "my_performance": None}) == 80.0
+    assert f._rating({"score": 10, "my_performance": 80,
+                      "employer_engagement": None}) == 80.0
+
+
+def test_an_unscored_activity_is_still_no_reading():
+    """The fallback must not manufacture one. A meeting logged with nothing
+    filled in anywhere is exactly as informative as no meeting at all."""
+    assert f._rating({"when": None}) is None
+    assert f._rating(m()) is None
+    out = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(), m()])
+    assert out["components"]["quality"] is None
+    assert out["components"]["scored_meetings"] == 0
+
+
+def test_setup_facts_alone_cannot_reach_commit():
+    """The failure mode that banding off `total_known` opens up. Negotiation
+    plus a referral plus a champion plus a strong fit is a perfect score over
+    everything the model was told -- and nobody has reported how a single
+    conversation went. That is a Best Case at most."""
+    out = f.automated_forecast(
+        stage="Negotiation", source="Referral", champion=True,
+        resume_text=RESUME, jd_text=MATCHING_JD)
+
+    assert out["total_known"] >= f.COMMIT_AT
+    assert out["confidence"] == "thin"
+    assert out["category"] == f.BEST_CASE
+
+
+def test_no_interaction_evidence_caps_confidence_at_thin():
+    """Stage, source, fit and champion are all knowable before anyone speaks to
+    you. Three of them filled in used to read "ok evidence" over an empty
+    meetings column, which is how Condor came to look confident about nothing."""
+    setup_only = f.automated_forecast(
+        stage="Negotiation", source="Referral", champion=True,
+        resume_text=RESUME, jd_text=MATCHING_JD)
+    assert setup_only["confidence"] == "thin"
+
+    with_a_meeting = f.automated_forecast(
+        stage="Negotiation", source="Referral", champion=True,
+        resume_text=RESUME, jd_text=MATCHING_JD, meetings=[m(perf=80, eng=80)])
+    assert with_a_meeting["confidence"] == "high"
+    assert with_a_meeting["category"] == f.COMMIT
+
+
+def test_an_email_alone_is_enough_interaction_to_lift_the_cap():
+    """Thin means "nothing has happened yet", not "no meeting has happened".
+    A recruiter thread is a real interaction and counts as one."""
+    out = f.automated_forecast(
+        stage="Negotiation", source="Referral", champion=True,
+        resume_text=RESUME, jd_text=MATCHING_JD, threads=[th(perf=80, eng=80)])
+    assert out["confidence"] != "thin"
+    assert out["category"] == f.COMMIT
+
+
+def test_total_known_does_not_punish_a_record_for_columns_nobody_filled_in():
+    """The reason the band moved off the raw total. Adding two components to
+    the model must not restate every existing record as twenty points worse."""
+    four_component = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=70, eng=70)],
+        resume_text=RESUME, jd_text=MATCHING_JD)
+    six_component = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=70, eng=70)],
+        resume_text=RESUME, jd_text=MATCHING_JD,
+        threads=[th(perf=70, eng=70)], champion=True)
+
+    assert six_component["total"] > four_component["total"]
+    assert abs(six_component["total_known"] - four_component["total_known"]) < 12
+
+
+def test_champion_and_email_appear_in_every_component_dict():
+    """Including the closed short-circuits, which build their components a
+    different way. A template reading components["champion"] must not raise on
+    a won application."""
+    for out in [
+        f.automated_forecast(stage="Closed Won", source=None),
+        f.automated_forecast(stage="Closed Lost", source=None),
+        f.automated_forecast(stage="Qualification", source=None),
+        f.automated_forecast(stage="Discovery", source="Referral",
+                             threads=[th(perf=50, eng=50)], champion=False),
+    ]:
+        assert "champion" in out["components"]
+        assert "email" in out["components"]
+        assert "email_quality" in out["components"]
+        assert "scored_threads" in out["components"]
+        assert "available" in out["components"]
+
+
+def test_depth_pays_on_a_zero_rated_activity_but_quality_does_not():
+    """A deliberate edge, pinned so nobody 'fixes' it later. An activity rated 0
+    earns its depth credit and no quality credit, so logging a conversation that
+    went badly nudges the raw total *up* by the depth points while pulling
+    `total_known` down. Both are correct: something did happen (depth), and it
+    went badly (quality). The band reads `total_known`, so the number on the
+    card moves the way a person expects.
+
+    Depth is still gated on there being a reading at all -- an activity nobody
+    rated earns neither, which is what keeps this from paying out for the mere
+    act of logging rows."""
+    warm = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=90, eng=90)])
+    chilled = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=90, eng=90)],
+        threads=[th(perf=0, eng=0)])
+    unrated = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=90, eng=90)],
+        threads=[th()])
+
+    assert chilled["total"] > warm["total"]
+    assert chilled["total_known"] < warm["total_known"]
+    assert unrated["total"] == warm["total"]
+    assert unrated["total_known"] == warm["total_known"]
+
+
+def test_a_considered_negative_costs_more_than_an_unanswered_question():
+    """Stated as the behaviour a person would check. Deciding there is no
+    champion should make the read worse than never having asked -- otherwise
+    filling the field in honestly is punished by being ignored."""
+    unknown = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=60, eng=60)])
+    no = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=60, eng=60)],
+        champion=False)
+    yes = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m(perf=60, eng=60)],
+        champion=True)
+
+    assert no["total_known"] < unknown["total_known"] < yes["total_known"]
+
+
+def test_the_weight_budgets_cannot_be_overspent():
+    """Depth credit is added on top of the quality share in both components, so
+    the caps have to hold or a chatty pursuit could outscore its own budget."""
+    out = f.automated_forecast(
+        stage="Negotiation", source="Referral", champion=True,
+        meetings=[m(perf=100, eng=100, when=i) for i in range(10)],
+        threads=[th(perf=100, eng=100, when=i) for i in range(10)],
+        resume_text=RESUME, jd_text=MATCHING_JD)
+    assert out["components"]["meetings"] <= f.W_MEETINGS
+    assert out["components"]["email"] <= f.W_EMAIL
+    assert out["total"] <= 100
+    assert out["total_known"] <= 100
 
 
 if __name__ == "__main__":

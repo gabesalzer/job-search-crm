@@ -76,28 +76,24 @@
           </div>
         </div>
         <div class="co">{{ app.company.name if app.company else "—" }}</div>
-        {% set roll = rollups.get(app.id) if rollups else None %}
-        {% if roll %}
-        <div class="scorerow" title="Latest win-likelihood reading across this application's scored meetings and email threads">
-          <span class="score">{{ roll.latest }}</span>
-          {% if roll.delta is not none %}
-          <span class="pill {% if roll.delta > 0 %}up{% elif roll.delta < 0 %}down{% endif %}">
-            {% if roll.delta > 0 %}▲ +{{ roll.delta }}{% elif roll.delta < 0 %}▼ {{ roll.delta }}{% else %}flat{% endif %}
-          </span>
-          {% endif %}
-          {% if roll.stale_days is not none %}
-          <span class="age {% if roll.stale_days >= 14 %}stale{% endif %}"
-                title="Days since the meeting or email this reading came from">
-            {% if roll.stale_days == 0 %}today{% else %}{{ roll.stale_days }}d ago{% endif %}
+        {% set fc = forecasts.get(app.id) if forecasts else None %}
+        {% set age = activity_ages.get(app.id) if activity_ages else None %}
+        {% if fc %}
+        <div class="scorerow" title="Forecast — {{ fc.reason }} ({{ fc.confidence }} evidence, scored over {{ fc.components.available }} of 100 points)">
+          <span class="score">{{ fc.total_known }}</span>
+          {% if age is not none %}
+          <span class="age {% if age >= 14 %}stale{% endif %}"
+                title="Days since the most recent meeting or email on this application. The forecast itself carries no sense of age, so it rides alongside.">
+            {% if age == 0 %}today{% else %}{{ age }}d ago{% endif %}
           </span>
           {% endif %}
         </div>
-        {% endif %}
-        {% set fc = forecasts.get(app.id) if forecasts else None %}
-        {% if fc %}
         <div class="metarow">
           <span class="fc fc-{{ fc.category|lower|replace(' ','-') }}"
                 title="Automated Forecast — {{ fc.reason }} ({{ fc.confidence }} evidence)">{{ fc.category }}</span>
+          {% if fc.confidence in ("none", "thin") %}
+          <span class="tag" title="Not enough behind this number to lean on it. Rate a meeting or an email thread to give it something to read.">{{ fc.confidence }} evidence</span>
+          {% endif %}
           {% if app.manual_forecast and app.manual_forecast.value != fc.category %}
           <span class="fc fc-manual" title="Your manual forecast, which disagrees with the automated one">≠ {{ app.manual_forecast.value }}</span>
           {% endif %}

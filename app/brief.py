@@ -69,7 +69,9 @@ def _day(value: Optional[datetime]) -> str:
 
 
 def _sortable(value: Optional[datetime]) -> datetime:
-    """Undated activity sorts to the front, matching _score_rollup's convention.
+    """Undated activity sorts to the front, so the brief reads oldest-first and
+    an activity nobody dated cannot masquerade as the latest thing that
+    happened.
 
     Form-entered dates come back naive while stamped ones come back aware, and
     comparing the two raises. Flatten to naive before any sort touches them.

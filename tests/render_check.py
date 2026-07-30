@@ -90,46 +90,65 @@ activity = [
      "score": meeting.score},
 ]
 
-# Mirrors what ui._score_rollup() returns: latest reading plus the change from
-# the one before it. Kept as a literal so the template can be smoke-tested
-# without importing the app package (which needs FastAPI/SQLAlchemy).
-score_rollup = {"latest": 70, "previous": 55, "delta": 15, "count": 2, "stale_days": 3}
+# The forecast fixtures are now produced by importing the real module rather
+# than hand-written as literals. app/forecast.py is stdlib-only, so importing
+# it here costs nothing, and the literals had already gone stale once: they
+# still carried the four-component shape (no `email`, no `champion`, no
+# `total_known`) after the model grew to six, which meant this file was
+# smoke-testing the templates against a payload the app can no longer emit.
+# A fixture that can drift from the thing it stands in for is worse than no
+# fixture, because it goes on passing.
+#
+# The literals' one real advantage -- being able to construct shapes the model
+# would only emit under awkward conditions -- is kept by calling the model with
+# deliberately awkward inputs below rather than by transcribing its output.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from app import forecast as forecast_model  # noqa: E402
 
-# Mirrors what forecast.automated_forecast() returns. Unlike the rollup, this
-# one *could* be produced by importing the real module (it's stdlib-only), but
-# it's kept as a literal for the same reason the rollup is: this file's job is
-# to prove the templates survive every shape they can be handed, including
-# shapes the model would only emit under conditions that are awkward to
-# construct. tests/test_forecast.py is where the values themselves are checked.
-forecast = {
-    "category": "Best Case", "total": 58, "confidence": "ok",
-    "reason": "Best Case: meeting quality 78 across 2 scored meetings, referral origin, strong resume/JD overlap.",
-    "components": {
-        "stage": 12.0, "meetings": 25.8, "fit": 6.2, "source": 15.0,
-        "quality": 78.0, "fit_index": 0.194, "fit_band": "Moderate",
-        "scored_meetings": 2,
-    },
-}
+# The ordinary case: a mid-process pursuit with a couple of rated meetings.
+forecast = forecast_model.automated_forecast(
+    stage="Discovery", source="Referral",
+    meetings=[{"when": datetime(2026, 3, 10), "my_performance": 70,
+               "employer_engagement": 80},
+              {"when": datetime(2026, 3, 20), "my_performance": 75,
+               "employer_engagement": 80}],
+    threads=[{"when": datetime(2026, 3, 22), "my_performance": 60,
+              "employer_engagement": 65}],
+    resume_text=" ".join(["revenue operations forecast pipeline salesforce"] * 12),
+    jd_text=" ".join(["revenue operations forecast pipeline territory"] * 12),
+    champion=True,
+)
 
 # The empty state, which is what every brand-new application renders. Every
 # optional component is None here, so this is the case that catches a template
 # reaching for `.fit_band|lower` or formatting a null index.
-forecast_blank = {
-    "category": "Pipeline", "total": 4, "confidence": "none",
-    "reason": "Nothing to read yet — no scored meetings, no fit, no source.",
-    "components": {
-        "stage": 4.0, "meetings": 0.0, "fit": 0.0, "source": 0.0,
-        "quality": None, "fit_index": None, "fit_band": None, "scored_meetings": 0,
-    },
-}
+forecast_blank = forecast_model.automated_forecast(stage="Qualification", source=None)
 
-forecast_commit = {
-    "category": "Commit", "total": 100, "confidence": "high",
-    "reason": "Closed Won — this one is decided.",
-    "components": {
-        "stage": 0.0, "meetings": 0.0, "fit": 0.0, "source": 0.0,
-        "quality": None, "fit_index": None, "fit_band": None, "scored_meetings": 0,
-    },
+# The closed short-circuit, which builds its components a different way and is
+# the branch most likely to be missing a key a template reaches for.
+forecast_commit = forecast_model.automated_forecast(stage="Closed Won", source=None)
+
+# Setup facts only: a perfect `total_known` with nothing behind it, capped to
+# Best Case by the confidence gate. This is the shape that reads confident and
+# isn't, so the panel has to render the "thin evidence" pill on it.
+forecast_thin = forecast_model.automated_forecast(
+    stage="Negotiation", source="Referral", champion=True)
+
+# A deliberate "no champion" -- the tri-state's middle case, where the template
+# must not print the "not assessed" note.
+forecast_no_champion = forecast_model.automated_forecast(
+    stage="Discovery", source="Outbound", champion=False,
+    meetings=[{"when": datetime(2026, 3, 10), "my_performance": 20,
+               "employer_engagement": 15}],
+)
+
+FORECAST_WEIGHTS = {
+    "stage": forecast_model.W_STAGE,
+    "meetings": forecast_model.W_MEETINGS,
+    "email": forecast_model.W_EMAIL,
+    "fit": forecast_model.W_FIT,
+    "source": forecast_model.W_SOURCE,
+    "champion": forecast_model.W_CHAMPION,
 }
 
 FORECAST_VALUES = ["Pipeline", "Best Case", "Commit", "Closed"]
@@ -172,13 +191,15 @@ cases = [
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": score_rollup,
+        "activity_age": 3,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
         "brief": brief_written, "brief_error": "",
     }),
-    # Nothing scored yet: the rollup is None and the widget should stay hidden
-    # rather than rendering an empty box -- the common state for a brand-new
-    # application, so it's the one most worth smoke-testing.
+    # Nothing rated yet, and no activity at all, so the age is None and the
+    # staleness warning has to stay hidden rather than comparing None to 14 --
+    # the common state for a brand-new application, so it's the one most worth
+    # smoke-testing.
     ("application_edit.html (unscored)", {
         "active": "board",
         "app_obj": SimpleNamespace(**{**app_obj.__dict__, "source": None, "context": None}),
@@ -187,8 +208,9 @@ cases = [
         "postings": [posting],
         "activity": [{**row, "score": None} for row in activity],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": None, "forecast": forecast_blank,
+        "activity_age": None, "forecast": forecast_blank,
         "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
         "brief": brief_empty, "brief_error": "",
     }),
     # Every date null. This is the case the Dates block exists for: the fields
@@ -210,34 +232,36 @@ cases = [
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": score_rollup,
+        "activity_age": 0,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
         # Same migration story as manual_forecast above: brief, brief_model and
         # brief_generated_at are all NULL on every row predating the column,
         # which is every application currently in the Render database.
         "brief": brief_empty, "brief_error": "",
     }),
-    # A downward move, to exercise the other branch of the trend pill.
-    ("application_edit.html (cooling)", {
+    # A pursuit that has gone quiet past the 14-day threshold, which is the
+    # branch that renders the staleness warning.
+    ("application_edit.html (gone quiet)", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": {"latest": 30, "previous": 70, "delta": -40, "count": 3,
-                         "stale_days": 41},
-        "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "activity_age": 41,
+        "forecast": forecast_no_champion, "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
         "brief": brief_stale, "brief_error": "",
     }),
-    # A single scored activity: there's no prior reading, so delta is None and
-    # the trend pill has to be skipped without blowing up on the comparison.
-    ("application_edit.html (first score)", {
+    # A record whose forecast reads high off setup facts alone. The number
+    # looks confident and the evidence pill has to say otherwise.
+    ("application_edit.html (thin evidence)", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
         "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
-        "score_rollup": {"latest": 40, "previous": None, "delta": None, "count": 1,
-                         "stale_days": None},
-        "forecast": forecast, "forecast_values": FORECAST_VALUES,
+        "activity_age": None,
+        "forecast": forecast_thin, "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
         "brief": brief_off, "brief_error": "API returned 401: invalid x-api-key",
     }),
     ("meeting_edit.html", {
@@ -291,32 +315,31 @@ cases = [
     ("board.html", {
         "active": "board", "stages": ["Staging", "Qualification", "Discovery"],
         "grouped": {"Staging": [], "Qualification": [app_obj], "Discovery": []},
-        "rollups": {app_obj.id: score_rollup},
         "forecasts": {app_obj.id: forecast},
+        "activity_ages": {app_obj.id: 3},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
     }),
-    # A card whose latest reading is old enough to be flagged, and one sitting
+    # A card whose latest activity is old enough to be flagged, and one sitting
     # in Staging. These are the two states the card renders differently from
     # the ordinary case, so both are worth a smoke test.
-    ("board.html (stale reading, staged card)", {
+    ("board.html (stale card, staged card)", {
         "active": "board", "stages": ["Staging", "Qualification"],
         "grouped": {"Staging": [app_obj], "Qualification": [app_obj]},
-        "rollups": {app_obj.id: {"latest": 45, "previous": 70, "delta": -25,
-                                 "count": 4, "stale_days": 41}},
         "forecasts": {app_obj.id: forecast_blank},
+        "activity_ages": {app_obj.id: 41},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
     }),
-    # Nothing scored anywhere: every card has to skip the score row entirely
-    # rather than render an empty one. `rollups.get()` on a missing id is the
-    # branch under test.
+    # No forecast keyed for this card at all: it has to skip the score row
+    # entirely rather than render an empty one. `forecasts.get()` on a missing
+    # id is the branch under test.
     ("board.html (nothing scored)", {
         "active": "board", "stages": ["Staging", "Qualification"],
         "grouped": {"Staging": [app_obj], "Qualification": []},
-        "rollups": {}, "forecasts": {}, "default_stage": "Qualification",
+        "forecasts": {}, "activity_ages": {}, "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
     }),
@@ -328,18 +351,17 @@ cases = [
         "grouped": {"Qualification": [
             SimpleNamespace(**{**app_obj.__dict__, "manual_forecast": None})
         ]},
-        "rollups": {}, "forecasts": {app_obj.id: forecast_blank},
+        "forecasts": {app_obj.id: forecast_blank}, "activity_ages": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
     }),
-    # An undated latest reading: stale_days is None, which must render as no
-    # age at all rather than as a huge number.
-    ("board.html (undated reading)", {
+    # An application whose activity carries no usable date at all: the age is
+    # None, which must render as no age rather than as a huge number.
+    ("board.html (undated activity)", {
         "active": "board", "stages": ["Qualification"],
         "grouped": {"Qualification": [app_obj]},
-        "rollups": {app_obj.id: {"latest": 60, "previous": None, "delta": None,
-                                 "count": 1, "stale_days": None}},
+        "activity_ages": {app_obj.id: None},
         "forecasts": {app_obj.id: forecast_commit},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],

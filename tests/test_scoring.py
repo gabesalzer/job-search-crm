@@ -1,6 +1,6 @@
-"""Design proof for the win-likelihood score on Meeting and Email Thread.
+"""Design proof for the win-likelihood score, and for the age that outlived it.
 
-Mirrors `_parse_score`, `_apply_score`, and `_score_rollup` from
+Mirrors `_parse_score`, `_apply_score`, and `_activity_age` from
 app/routers/ui.py by hand, the same way test_cascade_design.py mirrors the
 DDL -- this sandbox can't import FastAPI/SQLAlchemy, so ui.py itself can't be
 imported here. **If the real helpers in ui.py change, mirror the change here
@@ -14,16 +14,26 @@ code:
    the 0-100 range is enforced entirely at the one door that writes the
    column. If that clamp is wrong, nothing downstream catches it.
 
-2. The rollup is derived at display time from a *mixed* set of activities --
-   meetings and threads, each reaching for a different date field, and
-   `scored_at` stamped in UTC while form-entered dates come back naive.
-   Getting the ordering wrong silently reports the wrong trend rather than
-   raising, which is the kind of bug that survives a long time. It did: the
-   rollup shipped sorting on `scored_at` first, which ordered the whole series
-   by when rows were typed in, and it took a card visibly disagreeing with the
-   activity list rendered directly beneath it to surface. The ordering and
-   staleness tests below assert the corrected behaviour and are deliberately
-   worded to say what the old ones got wrong.
+   The score is still written and still read -- it is now the *fallback*
+   reading inside the forecast, used for an activity whose performance and
+   engagement fields are blank, which is every activity in the database as it
+   stands today. See `forecast._rating`. So this parsing and stamping still
+   guards a live path; only the arithmetic that used to sit on top of it went
+   away.
+
+2. What went away was `_score_rollup`, which derived a second headline number
+   from those scores and displayed it beside the automated forecast with no
+   stated rule for which one won. `_activity_age` is what replaced it, and it
+   answers a much smaller question: how long has this pursuit been quiet. It
+   is derived at display time from a *mixed* set of activities -- meetings and
+   threads, each reaching for a different date field, and `scored_at` stamped
+   in UTC while form-entered dates come back naive. Getting the dates wrong
+   reports a plausible wrong number rather than raising, which is the kind of
+   bug that survives a long time. It did: the rollup shipped measuring from
+   `scored_at` first, so a card could go quiet for a month and still read
+   "1d ago" because you'd tidied up your data entry. The age tests below carry
+   that lesson forward and are deliberately worded to say what the old ones
+   got wrong.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -71,40 +81,30 @@ def apply_score(obj, raw_score, reason, now):
     obj.score_reason = (reason or "").strip() or None
 
 
-def _sortable(dt):
+def naive_utc(dt):
+    """Mirror of ui._naive_utc()."""
     if dt is None:
-        return datetime.min
+        return None
     if dt.tzinfo is not None:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
 
 
-def score_rollup(activities, now=None):
-    """Mirror of ui._score_rollup(), flattened over one list since the real
-    one only differs in which date field each side falls back to.
+def activity_age(activities, now=None):
+    """Mirror of ui._activity_age(), flattened over one list since the real one
+    only differs in which date field each side falls back to -- `meeting_date`
+    for a meeting, `last_message_at` then `started_at` for a thread, and
+    `scored_at` behind both. That fallback chain is `when or scored_at` here.
 
-    `now` is a parameter here only so the staleness assertions are
-    deterministic; the real one reads the clock.
+    `now` is a parameter here only so the assertions are deterministic; the
+    real one reads the clock.
     """
-    scored = [
-        (_sortable(a.when or a.scored_at), a.score)
-        for a in activities
-        if a.score is not None
-    ]
-    if not scored:
+    dates = [naive_utc(a.when or a.scored_at) for a in activities]
+    usable = [d for d in dates if d is not None]
+    if not usable:
         return None
-    scored.sort(key=lambda row: row[0])
-    latest_at, latest = scored[-1]
-    previous = scored[-2][1] if len(scored) > 1 else None
-    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
-    stale_days = None if latest_at == datetime.min else max((now - latest_at).days, 0)
-    return {
-        "latest": latest,
-        "previous": previous,
-        "delta": None if previous is None else latest - previous,
-        "count": len(scored),
-        "stale_days": stale_days,
-    }
+    now = naive_utc(now) or datetime.now(timezone.utc).replace(tzinfo=None)
+    return max((now - max(usable)).days, 0)
 
 
 JULY = datetime(2026, 7, 1, 12, 0)
@@ -176,8 +176,11 @@ def test_changing_the_number_restamps():
 
 
 def test_editing_only_the_reason_does_not_restamp():
-    """Fixing a typo in the rationale isn't a new judgment. Re-dating it
-    would reorder the trend series and change what the rollup reports."""
+    """Fixing a typo in the rationale isn't a new judgment, and `scored_at` is
+    load-bearing in two places downstream: it is the fallback date an undated
+    activity is aged off, and it is how `forecast.activity_quality` picks which
+    activity is the latest one worth reading. Re-dating a typo fix would move
+    both."""
     a = Activity(when=JULY)
     apply_score(a, "70", "went wel", now=JULY)
     later = JULY + timedelta(days=3)
@@ -187,8 +190,9 @@ def test_editing_only_the_reason_does_not_restamp():
 
 
 def test_clearing_the_score_clears_reason_and_timestamp():
-    """An unscored activity must never carry a stale "scored on" date, or the
-    rollup would sort on a judgment that no longer exists."""
+    """An unscored activity must never carry a stale "scored on" date, or an
+    activity whose judgment was explicitly withdrawn would go on presenting
+    itself to `forecast.activity_quality` as the most recent reading."""
     a = Activity(when=JULY)
     apply_score(a, "70", "went well", now=JULY)
     apply_score(a, "", "went well", now=JULY + timedelta(days=1))
@@ -223,186 +227,124 @@ def test_same_score_with_no_prior_stamp_gets_stamped():
 
 
 # --------------------------------------------------------------------------- #
-# Rollup
+# Activity age -- how long this pursuit has been quiet
 # --------------------------------------------------------------------------- #
-def test_nothing_scored_returns_none():
-    """So the template can skip the widget entirely rather than render an
-    empty box on every brand-new application."""
-    assert score_rollup([Activity(when=JULY), Activity(when=JULY)]) is None
+def test_no_activity_at_all_reports_no_age():
+    """So the template can skip the widget entirely rather than render an empty
+    box on every brand-new application. None is "nothing has ever happened
+    here", which is a different fact from a large number of days."""
+    assert activity_age([]) is None
 
 
-def test_single_score_has_no_delta():
-    roll = score_rollup([Activity(when=JULY, score=40, scored_at=JULY)], now=JULY)
-    assert roll == {
-        "latest": 40, "previous": None, "delta": None, "count": 1, "stale_days": 0,
-    }
+def test_an_activity_with_no_usable_date_reports_no_age():
+    """Every date field on both objects is nullable, so an activity can exist
+    carrying no date at all. That is "unknown when", not "very old" -- the old
+    rollup sorted such a row onto datetime.min, and subtracting from that
+    yields roughly 740,000 days, which would render as nonsense on a card."""
+    assert activity_age([Activity(when=None, scored_at=None)], now=JULY) is None
 
 
-def test_latest_and_delta_follow_the_event_date_not_when_it_was_scored():
-    """The bug this replaced a test for: the rollup used to sort on `scored_at`
-    first, so logging two meetings in one sitting -- oldest typed in last --
-    made the older conversation the "latest" reading. Since `_apply_score` is
-    the only writer of `score` anywhere in the app, every scored row has a
-    `scored_at`, and the intended `or when` fallback could never fire; the whole
-    series was ordered by data entry.
+def test_age_measures_the_most_recent_activity_not_the_oldest():
+    """The board shows one age per card and it has to describe the pursuit's
+    current silence. Measuring from the first activity would make an
+    application that met with someone yesterday look abandoned."""
+    age = activity_age([
+        Activity(when=JULY - timedelta(days=60)),
+        Activity(when=JULY),
+    ], now=JULY + timedelta(days=3))
+    assert age == 3
 
-    A score is a judgment *about* an event and belongs where the event sits.
-    Here the three-week-old meeting was typed in a day later than the thread,
-    and must still land *before* it.
-    """
-    old_meeting_scored_late = Activity(
-        when=JULY - timedelta(days=21), score=30, scored_at=JULY + timedelta(days=1)
+
+def test_age_measures_the_event_not_the_keystroke():
+    """This used to assert the opposite, and the opposite was the wrong claim.
+    A meeting from a month ago that you typed in yesterday is not a day-old
+    situation -- nothing has happened on that pursuit in thirty-one days, and
+    that silence is the thing worth acting on. Measuring from `scored_at` let a
+    card go quiet for a month and still read "1d ago" because you had tidied up
+    your data entry."""
+    age = activity_age(
+        [Activity(when=JULY - timedelta(days=30), score=55, scored_at=JULY)],
+        now=JULY + timedelta(days=1),
     )
-    recent_thread = Activity(when=JULY, score=80, scored_at=JULY)
-    roll = score_rollup([old_meeting_scored_late, recent_thread])
-    assert roll["latest"] == 80
-    assert roll["previous"] == 30
-    assert roll["delta"] == 50
+    assert age == 31
 
 
-def test_entry_order_cannot_reorder_the_series():
-    """Same claim from the other direction: hold the event dates fixed, vary
-    only when each was typed in, and nothing about the rollup may move."""
-    a = Activity(when=JULY - timedelta(days=5), score=20, scored_at=JULY)
-    b = Activity(when=JULY, score=60, scored_at=JULY + timedelta(days=9))
-    typed_in_reverse = [
-        Activity(when=JULY - timedelta(days=5), score=20, scored_at=JULY + timedelta(days=9)),
-        Activity(when=JULY, score=60, scored_at=JULY),
-    ]
-    assert score_rollup([a, b])["delta"] == score_rollup(typed_in_reverse)["delta"] == 40
+def test_an_unrated_activity_still_counts():
+    """The sharpest difference from the rollup it replaced. That one only ever
+    looked at activities carrying a `score`, because it was averaging readings.
+    This one is not reading anything -- "nothing has happened in 21 days" is
+    true whether or not you got around to rating what happened, and a recent
+    unrated meeting must stop the card reading as stale."""
+    stale = activity_age([Activity(when=JULY - timedelta(days=21), score=40)], now=JULY)
+    fresh = activity_age([
+        Activity(when=JULY - timedelta(days=21), score=40),
+        Activity(when=JULY),  # happened, not yet rated
+    ], now=JULY)
+    assert stale == 21
+    assert fresh == 0
 
 
 def test_falls_back_to_scored_at_when_the_activity_has_no_date_of_its_own():
-    """The fallback now runs the other way, and unlike the old one it can
-    actually fire: an activity with no date of its own is ordered by when you
-    scored it, which is the only date it has."""
-    a = Activity(when=None, score=20, scored_at=JULY - timedelta(days=5))
-    b = Activity(when=None, score=60, scored_at=JULY)
-    roll = score_rollup([b, a])  # deliberately out of order
-    assert roll["latest"] == 60
-    assert roll["delta"] == 40
+    """The fallback runs this way round deliberately, and unlike the rollup's
+    original it can actually fire: an activity with no date of its own is aged
+    off when you scored it, because that is the only date it has."""
+    assert activity_age([Activity(when=None, score=60, scored_at=JULY)],
+                        now=JULY + timedelta(days=4)) == 4
+
+
+def test_an_undated_activity_cannot_hide_a_dated_one():
+    """Undated rows are dropped rather than sorted to the front. The rollup
+    sorted them onto datetime.min, which was harmless for ordering but meant a
+    single undated row could take the "latest" slot and report no age at all.
+    Here the dated sibling still answers the question."""
+    assert activity_age([
+        Activity(when=None, scored_at=None),
+        Activity(when=JULY - timedelta(days=6)),
+    ], now=JULY) == 6
+
+
+def test_entry_order_does_not_matter():
+    """The answer is a max over dates, so nothing about the order rows come
+    back from the ORM in may move it."""
+    a = Activity(when=JULY - timedelta(days=5))
+    b = Activity(when=JULY)
+    assert activity_age([a, b], now=JULY) == activity_age([b, a], now=JULY) == 0
 
 
 def test_mixing_aware_and_naive_datetimes_does_not_raise():
     """`scored_at` is stamped with datetime.now(timezone.utc) (aware) while
-    form-entered dates parse naive. Comparing the two raises TypeError, so
-    the rollup flattens everything to naive UTC first. Without that, an
-    application with one hand-dated and one app-stamped score would 500."""
-    aware = Activity(when=None, score=90, scored_at=datetime(2026, 7, 2, 0, 0, tzinfo=timezone.utc))
-    naive = Activity(when=datetime(2026, 7, 1, 0, 0), score=50, scored_at=None)
-    roll = score_rollup([aware, naive])
-    assert roll["latest"] == 90
-    assert roll["previous"] == 50
-    assert roll["count"] == 2
+    form-entered dates parse naive. max() over that mix raises TypeError, and
+    because this is called from inside a template render the raise would take
+    the whole board down rather than degrade one card. Everything is flattened
+    to naive UTC first."""
+    aware = Activity(when=None, scored_at=datetime(2026, 7, 2, 0, 0, tzinfo=timezone.utc))
+    naive = Activity(when=datetime(2026, 7, 1, 0, 0))
+    assert activity_age([aware, naive], now=datetime(2026, 7, 5, 0, 0)) == 3
 
 
-def test_unscored_activities_are_ignored_in_the_count():
-    """`count` is "how many readings back this number", not "how much
-    activity happened" -- an unscored meeting must not inflate it."""
-    roll = score_rollup([
-        Activity(when=JULY, score=50, scored_at=JULY),
-        Activity(when=JULY),
-        Activity(when=JULY + timedelta(days=1), score=60, scored_at=JULY + timedelta(days=1)),
-    ])
-    assert roll["count"] == 2
+def test_age_survives_an_aware_now():
+    """Same hazard from the other side: the real function builds `now` naive on
+    purpose, but nothing stops a caller handing one in aware."""
+    assert activity_age(
+        [Activity(when=None, scored_at=datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc))],
+        now=datetime(2026, 7, 21, 0, 0, tzinfo=timezone.utc),
+    ) == 20
 
 
-def test_zero_scores_participate_in_the_rollup():
-    """A 0 is a reading, not an absence. If `if a.score` were used instead of
-    `is not None`, a "this is dead" score would silently vanish."""
-    roll = score_rollup([
-        Activity(when=JULY, score=70, scored_at=JULY),
-        Activity(when=JULY + timedelta(days=1), score=0, scored_at=JULY + timedelta(days=1)),
-    ])
-    assert roll["latest"] == 0
-    assert roll["delta"] == -70
-    assert roll["count"] == 2
+def test_a_future_dated_activity_clamps_to_zero():
+    """Activity dates are typed in by hand and can legitimately be in the
+    future -- a meeting on the calendar for next week. A negative age is
+    meaningless on a card, so it floors at 0."""
+    assert activity_age([Activity(when=JULY + timedelta(days=5))], now=JULY) == 0
 
 
-def test_flat_trend_reports_zero_delta_not_none():
-    """None means "no prior reading" and hides the pill; 0 means "held
-    steady" and should still show. Different facts."""
-    roll = score_rollup([
-        Activity(when=JULY, score=60, scored_at=JULY),
-        Activity(when=JULY + timedelta(days=1), score=60, scored_at=JULY + timedelta(days=1)),
-    ])
-    assert roll["delta"] == 0
-    assert roll["previous"] == 60
-
-
-def test_activity_with_no_dates_at_all_sorts_first():
-    """Neither `scored_at` nor an activity date -- possible, since every date
-    field on both objects is nullable. It must not crash the sort, and it
-    must not steal the "latest" slot from a dated reading."""
-    undated = Activity(when=None, score=10, scored_at=None)
-    dated = Activity(when=JULY, score=90, scored_at=JULY)
-    roll = score_rollup([undated, dated])
-    assert roll["latest"] == 90
-    assert roll["previous"] == 10
-
-
-# --------------------------------------------------------------------------- #
-# Staleness -- the age of the latest reading
-# --------------------------------------------------------------------------- #
-def test_stale_days_measures_the_latest_reading_not_the_oldest():
-    """The board shows one number per card, and the age has to describe *that*
-    number. Measuring from the first reading would make a freshly-rescored
-    application look abandoned."""
-    roll = score_rollup([
-        Activity(when=JULY - timedelta(days=60), score=30, scored_at=JULY - timedelta(days=60)),
-        Activity(when=JULY, score=70, scored_at=JULY),
-    ], now=JULY + timedelta(days=3))
-    assert roll["latest"] == 70
-    assert roll["stale_days"] == 3
-
-
-def test_stale_days_measures_the_event_not_the_keystroke():
-    """This used to assert the opposite, and the opposite was the wrong claim.
-    A meeting from a month ago that you typed in yesterday is not a day-old
-    situation -- nothing has happened on that pursuit in thirty-one days, and
-    that silence is the thing worth acting on. Measuring from `scored_at` let
-    a card go quiet for a month and still read "1d ago" because you'd tidied up
-    your data entry.
-
-    It follows the sort key deliberately: the age describes the reading the
-    rollup selected, so if the two used different dates the card could report an
-    age belonging to a different activity than the number above it.
-    """
-    roll = score_rollup(
-        [Activity(when=JULY - timedelta(days=30), score=55, scored_at=JULY)],
-        now=JULY + timedelta(days=1),
-    )
-    assert roll["stale_days"] == 31
-
-
-def test_undated_reading_reports_no_age_rather_than_a_huge_one():
-    """An activity with neither `scored_at` nor a date of its own sorts on
-    datetime.min. Subtracting from that yields ~740,000 days, which would
-    render as a nonsense number on the card, so the age is None instead --
-    "unknown when", not "very old"."""
-    roll = score_rollup([Activity(when=None, score=45, scored_at=None)], now=JULY)
-    assert roll["latest"] == 45
-    assert roll["stale_days"] is None
-
-
-def test_a_future_dated_reading_clamps_to_zero():
-    """`scored_at` is stamped by the app, but the fallback dates are typed in
-    by hand and can legitimately be in the future (a scheduled meeting scored
-    in advance). A negative age is meaningless on a card, so it floors at 0."""
-    roll = score_rollup(
-        [Activity(when=JULY + timedelta(days=5), score=60, scored_at=None)], now=JULY
-    )
-    assert roll["stale_days"] == 0
-
-
-def test_stale_days_survives_the_aware_naive_mix():
-    """Same hazard as the ordering: `scored_at` is aware, `now` is naive.
-    Subtracting the two raises TypeError, so both are flattened first."""
-    roll = score_rollup(
-        [Activity(when=None, score=80, scored_at=datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc))],
-        now=datetime(2026, 7, 21, 0, 0),
-    )
-    assert roll["stale_days"] == 20
+def test_zero_is_an_age_and_none_is_not():
+    """The template tests `activity_age is not none`, so these two must stay
+    distinguishable: 0 means "something happened today" and should render,
+    None means "nothing has ever happened" and should not. A truthiness test
+    at either end would collapse them."""
+    assert activity_age([Activity(when=JULY)], now=JULY) == 0
+    assert activity_age([Activity(when=None, scored_at=None)], now=JULY) is None
 
 
 if __name__ == "__main__":

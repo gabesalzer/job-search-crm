@@ -70,6 +70,29 @@
         Given how this thread is going, how likely is the application to end up Closed Won? Blank means unscored — leave it blank rather than guessing, since these readings are meant to be checkable against the eventual outcome.
         {% if thread.scored_at %}<br>Last scored {{ thread.scored_at.strftime("%b %d, %Y") }}.{% endif %}
       </p>
+      <div class="form-grid" style="margin-top:0.7rem">
+        <div class="field">
+          <label>My performance (0–100)</label>
+          <input name="my_performance" type="number" min="0" max="100" step="1"
+                 value="{{ thread.my_performance if thread.my_performance is not none else '' }}"
+                 placeholder="blank if not judged">
+        </div>
+        <div class="field">
+          <label>Their engagement (0–100)</label>
+          <input name="employer_engagement" type="number" min="0" max="100" step="1"
+                 value="{{ thread.employer_engagement if thread.employer_engagement is not none else '' }}"
+                 placeholder="blank if not judged">
+        </div>
+      </div>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0.3rem 0 0">
+        The same pair a meeting carries, and what the forecast actually reads — the score above is only its
+        fallback when both of these are blank. On a thread, engagement is mostly about their behaviour around
+        the message rather than the words in it: who replied, how fast, whether they moved something forward
+        unprompted, whether the answer to a direct question was actually an answer. A four-day one-line reply
+        from a coordinator is low engagement no matter how warm it reads. Performance is how well what you sent
+        did its job. Email is weighted at a third of a meeting and on its own budget, so a scheduling reply can
+        never replace a panel's reading.
+      </p>
     </div>
     <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
       <button class="btn" type="submit">Save changes</button>

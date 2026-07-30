@@ -51,27 +51,42 @@ from typing import Iterable, Optional
 # everything else, and paper fit is the weakest of the four because a resume
 # that matches a JD's vocabulary has told you very little about whether anyone
 # wants to hire you.
-W_STAGE = 30
-W_MEETINGS = 35
-W_FIT = 20
-W_SOURCE = 15
+W_STAGE = 25
+W_MEETINGS = 30
+W_EMAIL = 10
+W_FIT = 15
+W_SOURCE = 10
+W_CHAMPION = 10
+
+# Fit fell from 20 to 15 in the consolidation, and it should keep falling if it
+# ever competes with something better. Bag-of-words overlap was carrying a fifth
+# of the whole model while being, by its own docstring, the weakest evidence in
+# it -- Condor was earning 19.3 of 20 points from vocabulary similarity while
+# the app had no idea how any of its meetings went.
+#
+# Email is deliberately a third of meetings. A thread is real evidence, but a
+# recruiter typing "great, let's find time" is not the same order of information
+# as an hour in front of a hiring manager, and the old rollup's habit of letting
+# one email wholesale replace a meeting's reading is the exact failure this
+# split exists to prevent.
 
 # Stage contributes as an *input*, not a cap. A strong early pursuit can
 # therefore out-forecast a limp late one, which is the intended behavior: at
-# Discovery (12) with perfect meetings (35), perfect fit (20) and a referral
-# (15) you reach 82 and read Commit. The counter-argument -- that "more likely
-# than not to end in an accepted offer" is a claim about the *whole* remaining
-# path, and no amount of first-call warmth should let a Qualification-stage
-# record claim it -- is a real one, and the reason the stage weight rises
-# steeply rather than linearly. Qualification is worth almost nothing.
+# Discovery (10) with perfect meetings (30), perfect fit (15), a referral (10)
+# and a champion (10) you reach exactly 75 and read Commit. The
+# counter-argument -- that "more likely than not to end in an accepted offer"
+# is a claim about the *whole* remaining path, and no amount of first-call
+# warmth should let a Qualification-stage record claim it -- is a real one, and
+# the reason the stage weight rises steeply rather than linearly. Qualification
+# is worth almost nothing.
 STAGE_POINTS = {
     "Staging": 0,             # pre-application; there is no pursuit yet
-    "Qualification": 4,
-    "Discovery": 12,
-    "Takehome": 19,
-    "Executive Signoff": 25,
-    "Negotiation": 30,
-    "Closed Won": 30,
+    "Qualification": 3,
+    "Discovery": 10,
+    "Takehome": 16,
+    "Executive Signoff": 21,
+    "Negotiation": 25,
+    "Closed Won": 25,
     "Closed Lost": 0,
 }
 
@@ -81,10 +96,22 @@ STAGE_POINTS = {
 # zero -- a submitted application is still a real pursuit -- but it carries no
 # evidence that anyone on the other side has noticed.
 SOURCE_POINTS = {
-    "Referral": 15,
-    "Recruiter Inbound": 9,
-    "Outbound": 3,
+    "Referral": 10,
+    "Recruiter Inbound": 6,
+    "Outbound": 2,
 }
+
+# A champion is someone inside the company actively spending their own capital
+# to get you hired -- pushing the process along, arguing for you in a room you
+# aren't in. It is not "I know someone there", and it is not a friendly
+# interviewer. The distinction is the whole reason it earns as much as source
+# does: a warm introduction gets your resume read once, while a champion keeps
+# working after every meeting ends.
+#
+# None means you haven't formed a view and is not the same as False. Neither
+# earns points, but False counts as evidence and None does not, so declining to
+# answer never quietly reads as "no".
+CHAMPION_POINTS = 10
 
 # Band thresholds on the 0-100 total. COMMIT_AT is the user's own "75% or
 # higher"; BEST_CASE_AT is where "possible if a few things break our way" stops
@@ -112,8 +139,15 @@ PERFORMANCE_WEIGHT = 0.4
 # an organization that keeps booking time is spending something real, and that
 # is information the latest meeting's quality score does not contain.
 DEPTH_POINTS_PER_MEETING = 2
-MAX_DEPTH_POINTS = 7
-MAX_QUALITY_POINTS = W_MEETINGS - MAX_DEPTH_POINTS  # 28
+MAX_MEETING_DEPTH = 6
+MAX_MEETING_QUALITY = W_MEETINGS - MAX_MEETING_DEPTH  # 24
+
+# Threads get the same shape on a smaller budget. One point per rated thread
+# rather than two: a company that emails you four times has told you less than
+# a company that met you twice, and the depth term should say so.
+DEPTH_POINTS_PER_THREAD = 1
+MAX_EMAIL_DEPTH = 2
+MAX_EMAIL_QUALITY = W_EMAIL - MAX_EMAIL_DEPTH  # 8
 
 
 # --------------------------------------------------------------------------- #
@@ -197,9 +231,10 @@ def fit_index(resume_text: Optional[str], jd_text: Optional[str]) -> Optional[fl
     and it will happily reward a JD stuffed with the same buzzwords your resume
     happens to use. It is in the forecast because it is free, deterministic,
     reruns on every page load, and moves in roughly the right direction -- not
-    because it is a good judge of fit. That is why it carries the smallest
-    weight of the four components and why the UI shows it as a band rather than
-    as a number that would invite false precision.
+    because it is a good judge of fit. That is why it carries half the weight
+    meetings do despite being the only component that reads the actual role,
+    and why the UI shows it as a band rather than as a number that would invite
+    false precision.
 
     Returns None -- not 0.0 -- when either side is missing or too thin to say
     anything, keeping the same blank-is-not-zero rule the score fields use. A
@@ -243,12 +278,45 @@ def _fit_points(index: Optional[float]) -> float:
 # --------------------------------------------------------------------------- #
 # Meeting quality
 # --------------------------------------------------------------------------- #
-def meeting_quality(meetings: Iterable[dict]) -> Optional[float]:
-    """Blend the latest meeting's two quality reads into one 0-100 number.
+def _rating(activity: dict) -> Optional[float]:
+    """One 0-100 quality reading for a single activity, or None if unrated.
 
-    `meetings` is an iterable of dicts with `when`, `my_performance` and
-    `employer_engagement`; the caller is responsible for having sorted nothing,
-    since this picks the latest itself.
+    Precedence, and the reason for it. The decomposed fields win because they
+    say more: `my_performance` and `employer_engagement` are two independent
+    causes, and the 60/40 blend between them is itself a claim about which one
+    produces offers. The flat `score` covers the same ground at lower
+    resolution, so it is a fallback, not a peer.
+
+    Reading them in this order is also what stops the consolidation from
+    counting one judgment twice. Rate a meeting on both the decomposed fields
+    and the flat score -- which is the same opinion written down twice -- and
+    only the decomposed reading is used.
+
+    The two are not quite the same scale, and pretending otherwise would be
+    dishonest. `score` answers "how likely is this to end Closed Won"; the
+    blend answers "how did this interaction go". They correlate strongly and
+    both run 0-100 in the same direction, which is enough for something that
+    only fires when the better fields are blank -- but it is exactly why it is
+    a fallback, and why the breakdown names which one it used.
+    """
+    perf = activity.get("my_performance")
+    eng = activity.get("employer_engagement")
+    if perf is not None and eng is not None:
+        return ENGAGEMENT_WEIGHT * eng + PERFORMANCE_WEIGHT * perf
+    if eng is not None:
+        return float(eng)
+    if perf is not None:
+        return float(perf)
+    score = activity.get("score")
+    return None if score is None else float(score)
+
+
+def activity_quality(activities: Iterable[dict]) -> Optional[float]:
+    """Blend the latest activity's quality reads into one 0-100 number.
+
+    `activities` is an iterable of dicts with `when`, `my_performance`,
+    `employer_engagement` and `score`; the caller is responsible for having
+    sorted nothing, since this picks the latest itself.
 
     Latest rather than averaged, for the same reason the score rollup takes the
     latest reading: averaging a strong early screen against a bad recent panel
@@ -257,27 +325,18 @@ def meeting_quality(meetings: Iterable[dict]) -> Optional[float]:
     a count, rather than by letting old meetings drag the quality term.
 
     Either field alone is enough -- if only one is filled in, that one *is* the
-    quality. Meetings with neither are invisible here.
+    quality. Activities carrying no reading at all are invisible here.
     """
-    usable = [
-        m for m in meetings
-        if m.get("my_performance") is not None or m.get("employer_engagement") is not None
-    ]
+    usable = [a for a in activities if _rating(a) is not None]
     if not usable:
         return None
     # Partition rather than sorting on a (has_date, date) tuple: two undated
     # meetings would make that tuple compare None against None, which raises.
     # Undated meetings fall back to insertion order, which for an ORM
     # relationship is the ordering the model declares.
-    dated = [m for m in usable if m.get("when") is not None]
-    latest = max(dated, key=lambda m: m["when"]) if dated else usable[-1]
-    perf = latest.get("my_performance")
-    eng = latest.get("employer_engagement")
-    if perf is None:
-        return float(eng)
-    if eng is None:
-        return float(perf)
-    return ENGAGEMENT_WEIGHT * eng + PERFORMANCE_WEIGHT * perf
+    dated = [a for a in usable if a.get("when") is not None]
+    latest = max(dated, key=lambda a: a["when"]) if dated else usable[-1]
+    return _rating(latest)
 
 
 # --------------------------------------------------------------------------- #
@@ -287,16 +346,50 @@ def automated_forecast(
     stage: Optional[str],
     source: Optional[str],
     meetings: Optional[Iterable[dict]] = None,
+    threads: Optional[Iterable[dict]] = None,
     resume_text: Optional[str] = None,
     jd_text: Optional[str] = None,
+    champion: Optional[bool] = None,
 ) -> dict:
-    """Derive a forecast category from the four declared inputs.
+    """Derive one read from the six declared inputs.
 
-    Returns a dict carrying the category, the 0-100 total behind it, the four
-    component point values, a `confidence` describing how much of the model
-    actually had data, and a one-line `reason`. The components are returned
-    rather than hidden because a forecast you can't take apart is one you can
-    only either believe or ignore.
+    This replaced a pair of numbers that answered the same question two
+    different ways -- a hand-entered score rolled up off the latest scored
+    activity, and this derived forecast. Two numbers with no stated rule for
+    which one wins cost attention on every glance, and the disagreement between
+    them only taught you something if you already knew which to trust. The
+    hand-entered score did not disappear in the merge; it moved *inside*, as
+    the fallback reading for an activity whose decomposed fields are blank.
+    See `_rating`.
+
+    Returns the category, both totals (below), the component point values, a
+    `confidence` describing how much of the model actually had data, and a
+    one-line `reason`. Components are returned rather than hidden because a
+    number you can't take apart is one you can only believe or ignore.
+
+    Two totals, on purpose
+    ----------------------
+    `total` is the raw sum over all six components, out of 100. Anything not
+    filled in scores zero and drags the number down with it.
+
+    `total_known` renormalizes over only the components that had data. It
+    answers "given what we actually know, how does this look" -- the right
+    question when half a record is empty, and the wrong one when the empty half
+    is the half that matters. Not knowing how four meetings went is itself
+    information, and `total_known` discards it: a record can climb purely
+    because nobody rated anything on it.
+
+    `category` is banded off `total_known`, and `confidence` carries the
+    completeness that `total_known` throws away. Banding off the raw `total`
+    was the original choice, and it stopped surviving the day this model went
+    from four components to six: every record already in the database would
+    have dropped roughly twenty points overnight for champion and email fields
+    that did not exist the day before, and read as a collapse in prospects
+    rather than as two new empty columns. A raw total cannot tell those apart.
+    The guard against `total_known`'s own failure -- a record scoring a perfect
+    100 off stage and source alone -- is the confidence gate below, which
+    refuses to let anything reach Commit until some actual interaction has
+    been read.
 
     Closed stages short-circuit. A Closed Won application is not forecast, it
     is finished, and running the arithmetic on it would produce the absurdity
@@ -304,44 +397,79 @@ def automated_forecast(
     fields. Closed Lost goes to Pipeline for the same reason in reverse.
     """
     meetings = list(meetings or [])
+    threads = list(threads or [])
 
     if stage == "Closed Won":
-        return _result(COMMIT, 100.0, _no_components(), "high",
+        return _result(COMMIT, 100.0, 100.0, _no_components(), "high",
                        "Closed Won — this one is decided.")
     if stage == "Closed Lost":
-        return _result(PIPELINE, 0.0, _no_components(), "high",
+        return _result(PIPELINE, 0.0, 0.0, _no_components(), "high",
                        "Closed Lost — this one is decided.")
 
-    quality = meeting_quality(meetings)
-    scored_meetings = sum(
-        1 for m in meetings
-        if m.get("my_performance") is not None or m.get("employer_engagement") is not None
-    )
+    quality = activity_quality(meetings)
+    email_quality = activity_quality(threads)
+    scored_meetings = sum(1 for m in meetings if _rating(m) is not None)
+    scored_threads = sum(1 for t in threads if _rating(t) is not None)
     index = fit_index(resume_text, jd_text)
 
     stage_pts = float(STAGE_POINTS.get(stage or "", 0))
     source_pts = float(SOURCE_POINTS.get(source or "", 0))
     fit_pts = _fit_points(index)
+    # `champion` is tri-state and only True earns. False and None both score
+    # zero; they differ in whether they count as evidence, which happens below.
+    champion_pts = float(CHAMPION_POINTS) if champion else 0.0
     if quality is None:
         meeting_pts = 0.0
     else:
-        meeting_pts = (quality / 100.0) * MAX_QUALITY_POINTS + min(
-            scored_meetings * DEPTH_POINTS_PER_MEETING, MAX_DEPTH_POINTS
+        meeting_pts = (quality / 100.0) * MAX_MEETING_QUALITY + min(
+            scored_meetings * DEPTH_POINTS_PER_MEETING, MAX_MEETING_DEPTH
+        )
+    if email_quality is None:
+        email_pts = 0.0
+    else:
+        email_pts = (email_quality / 100.0) * MAX_EMAIL_QUALITY + min(
+            scored_threads * DEPTH_POINTS_PER_THREAD, MAX_EMAIL_DEPTH
         )
 
-    total = stage_pts + source_pts + fit_pts + meeting_pts
+    total = (stage_pts + source_pts + fit_pts + meeting_pts
+             + email_pts + champion_pts)
+
+    # Renormalization denominator. Stage and source are unconditionally in it
+    # because every application has both from the moment it exists -- there is
+    # no such thing as an application with an unknown stage -- which is what
+    # stops `total_known` from ever being computed over an empty denominator,
+    # or off a single lucky component.
+    known = [
+        (True, W_STAGE, stage_pts),
+        (True, W_SOURCE, source_pts),
+        (quality is not None, W_MEETINGS, meeting_pts),
+        (email_quality is not None, W_EMAIL, email_pts),
+        (index is not None, W_FIT, fit_pts),
+        (champion is not None, W_CHAMPION, champion_pts),
+    ]
+    available = sum(w for present, w, _ in known if present)
+    earned = sum(p for present, _, p in known if present)
+    total_known = (earned / available) * 100.0 if available else 0.0
+
     components = {
         "stage": round(stage_pts, 1),
         "meetings": round(meeting_pts, 1),
+        "email": round(email_pts, 1),
         "fit": round(fit_pts, 1),
         "source": round(source_pts, 1),
+        "champion": round(champion_pts, 1),
         "quality": None if quality is None else round(quality, 1),
+        "email_quality": None if email_quality is None else round(email_quality, 1),
         "fit_index": None if index is None else round(index, 3),
         "fit_band": fit_band(index),
         "scored_meetings": scored_meetings,
+        "scored_threads": scored_threads,
+        # How many of the 100 points were even in play. Shown so "46" can be
+        # read as "46 of a possible 50" rather than as a flat failure.
+        "available": available,
     }
 
-    # Confidence counts how many of the four components had real data behind
+    # Confidence counts how many of the six components had real data behind
     # them, and is reported separately from the category on purpose. A Pipeline
     # that means "I have nothing to go on" and a Pipeline that means "I have
     # plenty to go on and it's bad" are the same category and completely
@@ -349,8 +477,11 @@ def automated_forecast(
     # it, so it rides alongside instead.
     have = sum([
         quality is not None,
+        email_quality is not None,
         index is not None,
         source is not None,
+        # False is a real answer and counts; None means you haven't looked.
+        champion is not None,
         # Stage counts as evidence only once the pursuit is past Qualification.
         # Sitting at Qualification is the state every application is born in
         # (models.DEFAULT_STAGE) -- it is a fact about the column default, not
@@ -358,11 +489,38 @@ def automated_forecast(
         # empty record claim it had something to go on.
         stage_pts >= STAGE_POINTS["Discovery"],
     ])
-    confidence = "none" if have == 0 else "thin" if have <= 2 else "ok"
+    confidence = ("none" if have == 0 else "thin" if have <= 2
+                  else "ok" if have <= 4 else "high")
+    # Interaction evidence is privileged over the rest. Stage, source, fit and
+    # champion are all facts about the *setup* -- knowable before anyone has
+    # spoken to you -- and a record can satisfy three of them while the app has
+    # no idea how a single conversation went. Letting that read "ok evidence"
+    # is how Condor came to sit at 46 with a confident-looking label and an
+    # empty meetings column. Nothing is above thin until something happened.
+    if quality is None and email_quality is None:
+        confidence = "none" if confidence == "none" else "thin"
 
-    category = _band_for(total)
+    # Banded off `total_known`, not `total`. The raw total conflates two
+    # different things -- how good this looks, and how much of the form you
+    # filled in -- and adding champion and email as components made that
+    # conflation untenable: every record in the app would have silently dropped
+    # 20 points for fields that did not exist yesterday. `total_known` is a
+    # weighted average over the components that spoke, so it measures quality
+    # alone, and `confidence` measures completeness alongside it. One number per
+    # question rather than one number doing both badly.
+    #
+    # That split has a failure mode which the cap below closes. A Negotiation
+    # record with a referral and nothing else scores 35 of an available 35 --
+    # a perfect 100 built entirely out of facts known before anyone spoke to
+    # you. So a category above Best Case requires evidence that something
+    # actually happened, and `confidence` is already gated on exactly that.
+    category = _band_for(total_known)
+    if confidence == "none":
+        category = PIPELINE
+    elif confidence == "thin" and category == COMMIT:
+        category = BEST_CASE
 
-    return _result(category, total, components, confidence,
+    return _result(category, total, total_known, components, confidence,
                    _reason(category, confidence, components, quality, index, source))
 
 
@@ -389,17 +547,24 @@ def _no_components() -> dict:
     breakdown, and the first one to forget it would raise on a won deal.
     """
     return {
-        "stage": 0.0, "meetings": 0.0, "fit": 0.0, "source": 0.0,
-        "quality": None, "fit_index": None, "fit_band": None,
-        "scored_meetings": 0,
+        "stage": 0.0, "meetings": 0.0, "email": 0.0, "fit": 0.0,
+        "source": 0.0, "champion": 0.0,
+        "quality": None, "email_quality": None,
+        "fit_index": None, "fit_band": None,
+        "scored_meetings": 0, "scored_threads": 0,
+        "available": 0,
     }
 
 
-def _result(category: str, total: float, components: dict,
+def _result(category: str, total: float, total_known: float, components: dict,
             confidence: str, reason: str) -> dict:
     return {
         "category": category,
         "total": round(total),
+        # Kept separate rather than replacing `total`, so a template that wants
+        # "46 of a possible 50" and one that wants "92" can both be served
+        # without either recomputing the arithmetic for itself.
+        "total_known": round(total_known),
         "components": components,
         "confidence": confidence,
         "reason": reason,
@@ -409,18 +574,33 @@ def _result(category: str, total: float, components: dict,
 def _reason(category, confidence, components, quality, index, source) -> str:
     """One line naming the actual driver, not a summary of the inputs."""
     if confidence == "none":
-        return "Nothing to read yet — no scored meetings, no fit, no source."
+        return "Nothing to read yet — no rated activity, no fit, no source."
     bits = []
     if quality is not None:
         n = components["scored_meetings"]
         bits.append(
-            f"meeting quality {round(quality)} across {n} scored "
+            f"meeting quality {round(quality)} across {n} rated "
             f"{'meeting' if n == 1 else 'meetings'}"
         )
+    if components["email_quality"] is not None:
+        n = components["scored_threads"]
+        bits.append(
+            f"email quality {round(components['email_quality'])} across "
+            f"{n} rated {'thread' if n == 1 else 'threads'}"
+        )
+    if components["champion"]:
+        bits.append("a champion inside")
     if source:
         bits.append(f"{source.lower()} origin")
     if index is not None:
-        bits.append(f"{components['fit_band'].lower()} resume/JD overlap")
+        # The points are continuous while the band is three buckets, so a 0.292
+        # index earns 96% of the fit weight while still reading "moderate".
+        # Naming the points alongside the band stops the line contradicting the
+        # breakdown directly above it.
+        bits.append(
+            f"{components['fit_band'].lower()} resume/JD overlap "
+            f"({components['fit']}/{W_FIT})"
+        )
     else:
         bits.append("no JD or resume text to compare")
     lead = {

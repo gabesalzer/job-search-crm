@@ -75,6 +75,7 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -367,6 +368,37 @@ class JobApplication(Base):
         Enum(ForecastCategory), default=ForecastCategory.PIPELINE, index=True
     )
 
+    # Is someone inside spending their own capital to get you hired?
+    #
+    # Tri-state on purpose, and the third state is the point. True is a
+    # champion, False is "I looked and there isn't one", None is "I haven't
+    # formed a view". Only True earns points, but True and False are both
+    # evidence and None is not -- so answering the question honestly with a no
+    # makes the forecast read *worse* than leaving it blank, which is the
+    # correct incentive and the reason this can't be a plain Boolean with a
+    # False default. A default would silently assert a negative on every
+    # record in the database.
+    #
+    # The bar is deliberately high. A champion is someone who will argue for
+    # you in a room you're not in: the hiring manager pushing recruiting to
+    # move faster, the referrer following up unprompted, the interviewer who
+    # went and found you a second conversation. It is not "I know someone
+    # there", and it is not an interviewer who was friendly for an hour.
+    # Set it low and this becomes a ten-point bonus for having been treated
+    # politely.
+    #
+    # Person.is_champion already exists and is a *different* claim. That one is
+    # a property of an individual -- "this person is rooting for me" -- and it
+    # travels with them across every application they touch. This one is a
+    # property of *this pursuit*: is anybody working it from the inside. A
+    # friendly former colleague can be a champion in the first sense and do
+    # nothing whatsoever in the second. The two are deliberately not derived
+    # from each other, and only this one is read by the forecast, because
+    # Person.is_champion is a 0/1 with a 0 default and so cannot tell "no"
+    # apart from "never asked" -- exactly the distinction this column exists to
+    # preserve.
+    champion = Column(Boolean)  # True / False / None -- see above
+
     # Standing context on the opportunity itself: why this role is worth
     # pursuing, what you know about the team/comp/timeline, what would make you
     # walk. Deliberately separate from `notes`:
@@ -632,6 +664,30 @@ class EmailThread(Base):
     score = Column(Integer)             # 0-100, nullable = not scored
     score_reason = Column(Text)         # why you landed on that number
     scored_at = Column(DateTime)        # when the reading was taken
+
+    # --- The two causes underneath that blended score ---
+    #
+    # Deliberately the same pair of columns Meeting carries, with the same
+    # meaning and the same nullable-means-unjudged rule, so that the forecast
+    # can read one shape over both kinds of activity instead of special-casing
+    # them. See the identical block on Meeting for why they're kept apart.
+    #
+    # They read a little differently on a thread than on a call, and the
+    # difference is worth naming. `employer_engagement` on a thread is mostly
+    # about their behaviour around the message rather than the message itself:
+    # who replied, how fast, whether they moved something forward unprompted,
+    # whether the answer to a direct question was actually an answer.
+    # `my_performance` is how well what you sent did its job. A four-day
+    # one-line reply from a coordinator is a low engagement reading no matter
+    # how warm the words in it are.
+    #
+    # Weighted at a third of a meeting in app/forecast.py. An email is real
+    # evidence and it is not an interview, and the previous model -- which
+    # sorted threads and meetings into one list and read whichever was latest
+    # -- let a scheduling reply wholesale replace a panel's reading. Splitting
+    # the budget is what makes that impossible rather than merely unlikely.
+    my_performance = Column(Integer)        # 0-100: how well what I sent landed
+    employer_engagement = Column(Integer)   # 0-100: how interested they were
 
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

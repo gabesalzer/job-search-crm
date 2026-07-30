@@ -74,6 +74,18 @@
           Your call. Nothing else writes this — the automated read below never overwrites it.
         </p>
       </div>
+      <div class="field">
+        <label>Champion inside</label>
+        <select name="champion">
+          <option value="" {% if app_obj.champion is none %}selected{% endif %}>Not assessed</option>
+          <option value="yes" {% if app_obj.champion is true %}selected{% endif %}>Yes</option>
+          <option value="no" {% if app_obj.champion is false %}selected{% endif %}>No</option>
+        </select>
+        <p style="font-size:0.7rem;color:var(--neutral);margin:0.2rem 0 0">
+          Someone who will argue for you in a room you're not in — not “I know someone there”, and not a
+          friendly interviewer. “Not assessed” is left out of the forecast entirely; “No” counts against it.
+        </p>
+      </div>
     </div>
     <div style="margin-top:0.9rem;padding-top:0.8rem;border-top:1px solid var(--line)">
       <h3 style="font-size:0.86rem;margin:0 0 0.15rem">Dates</h3>
@@ -195,16 +207,20 @@
 <div style="max-width:720px;margin-top:1.4rem">
   <h2 style="font-size:1rem;margin:0 0 0.4rem">Forecast</h2>
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
-    Two independent reads. The one above is yours and is stored; this one is computed fresh on every page load
-    from stage, source, meeting quality, and resume/JD overlap, and is stored nowhere — a saved forecast is a
-    snapshot that goes stale the moment anything under it moves, and a stale forecast looks exactly like a fresh one.
-    Where the two disagree is the useful part, so neither is allowed to overwrite the other.
+    One read, from six inputs: how far the pursuit has gotten, how the meetings went, how the email threads went,
+    resume/JD overlap, where it came from, and whether anyone inside is pushing for you. Computed fresh on every
+    page load and stored nowhere — a saved forecast is a snapshot that goes stale the moment anything under it
+    moves, and a stale forecast looks exactly like a fresh one. Your own call sits above it and neither overwrites
+    the other; where the two disagree is the useful part.
   </p>
   <div class="panel">
     <div style="display:flex;align-items:baseline;gap:0.6rem;flex-wrap:wrap">
       <span class="fc fc-{{ forecast.category|lower|replace(' ','-') }}">{{ forecast.category }}</span>
-      <span style="font-size:0.78rem;color:var(--muted)">automated · {{ forecast.total }}/100</span>
-      <span class="pill" title="How many of the four inputs actually had data behind them. A Pipeline meaning “nothing to go on” and a Pipeline meaning “plenty to go on and it's bad” are the same category and different situations.">{{ forecast.confidence }} evidence</span>
+      <span style="font-size:1.5rem;font-weight:650"
+            title="Scored over the inputs that actually had data behind them, not over all 100 points. An empty field is a question nobody answered, not a bad answer.">{{ forecast.total_known }}</span>
+      <span style="font-size:0.78rem;color:var(--muted)">of what's known</span>
+      <span class="pill" title="The raw sum over all six components, where anything unfilled scores zero. Read the gap between this and the number to its left as how much of the record is still blank.">{{ forecast.total }}/100 raw · {{ forecast.components.available }} pts in play</span>
+      <span class="pill" title="How many of the six inputs had data behind them. Capped at “thin” until at least one meeting or thread has been rated, because stage, source, fit and champion are all knowable before anyone has spoken to you.">{{ forecast.confidence }} evidence</span>
       <span style="font-size:0.78rem;color:var(--muted);margin-left:auto">
         manual:
         {% if app_obj.manual_forecast %}
@@ -215,17 +231,19 @@
     <p style="font-size:0.82rem;margin:0.5rem 0 0">{{ forecast.reason }}</p>
     {% if app_obj.manual_forecast and app_obj.manual_forecast.value != forecast.category %}
     <p style="font-size:0.76rem;color:var(--muted);margin:0.45rem 0 0">
-      These two disagree. That isn't an error to reconcile — you can see things the four inputs can't, and the
+      These two disagree. That isn't an error to reconcile — you can see things the six inputs can't, and the
       inputs can catch a pursuit you're attached to. Worth knowing which of you is right, later.
     </p>
     {% endif %}
     <div style="margin-top:0.7rem;padding-top:0.6rem;border-top:1px solid var(--line)">
       <div style="display:flex;gap:1.1rem;flex-wrap:wrap;font-size:0.78rem">
         {% for label, pts, max_pts, note in [
-          ("Stage", forecast.components.stage, 30, "How far the pursuit has actually gotten."),
-          ("Meetings", forecast.components.meetings, 35, "Their engagement weighted over your performance, from the most recent scored meeting, plus a little for depth."),
-          ("Fit", forecast.components.fit, 20, "Vocabulary overlap between the resume and the JD. Smallest weight on purpose — it measures whether the two documents talk about the same things, not whether you can do the job."),
-          ("Source", forecast.components.source, 15, "Referral, recruiter inbound, or outbound."),
+          ("Stage", forecast.components.stage, forecast_weights.stage, "How far the pursuit has actually gotten."),
+          ("Meetings", forecast.components.meetings, forecast_weights.meetings, "Their engagement weighted over your performance, from the most recent rated meeting, plus a little for depth. Falls back to the hand-entered win-likelihood score when neither rating is filled in."),
+          ("Email", forecast.components.email, forecast_weights.email, "The same reading over the most recent rated email thread. Deliberately worth a third of a meeting, and on its own budget so a scheduling reply can never replace a panel's reading."),
+          ("Fit", forecast.components.fit, forecast_weights.fit, "Vocabulary overlap between the resume and the JD. It measures whether the two documents talk about the same things, not whether you can do the job."),
+          ("Source", forecast.components.source, forecast_weights.source, "Referral, recruiter inbound, or outbound."),
+          ("Champion", forecast.components.champion, forecast_weights.champion, "Someone inside spending their own capital to get you hired — arguing for you in a room you're not in. Not “I know someone there”, and not a friendly interviewer."),
         ] %}
         <span title="{{ note }}">
           <strong>{{ label }}</strong>
@@ -236,14 +254,23 @@
       <p style="font-size:0.74rem;color:var(--neutral);margin:0.5rem 0 0">
         {% if forecast.components.quality is not none %}
           Meeting quality {{ forecast.components.quality }} from {{ forecast.components.scored_meetings }}
-          scored {% if forecast.components.scored_meetings == 1 %}meeting{% else %}meetings{% endif %}.
+          rated {% if forecast.components.scored_meetings == 1 %}meeting{% else %}meetings{% endif %}.
         {% else %}
           No meeting has a performance or engagement rating yet — add them on a meeting to give this something to read.
+        {% endif %}
+        {% if forecast.components.email_quality is not none %}
+          Email quality {{ forecast.components.email_quality }} from {{ forecast.components.scored_threads }}
+          rated {% if forecast.components.scored_threads == 1 %}thread{% else %}threads{% endif %}.
+        {% else %}
+          No email thread has been rated.
         {% endif %}
         {% if forecast.components.fit_band %}
           Resume/JD overlap {{ forecast.components.fit_band }} ({{ forecast.components.fit_index }}).
         {% else %}
           No resume and posting text to compare.
+        {% endif %}
+        {% if app_obj.champion is none %}
+          Champion not assessed — a blank here is left out of the score entirely, while a deliberate “no” counts against it.
         {% endif %}
       </p>
     </div>
@@ -286,25 +313,10 @@
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     Meetings and email threads for this application, merged into one timeline, most recent first.
   </p>
-  {% if score_rollup %}
-  <div class="panel" style="margin-bottom:0.7rem;display:flex;align-items:baseline;gap:0.6rem;flex-wrap:wrap">
-    <span style="font-size:1.5rem;font-weight:650">{{ score_rollup.latest }}</span>
-    <span style="font-size:0.78rem;color:var(--muted)">win likelihood</span>
-    {% if score_rollup.delta is not none %}
-    <span class="pill {% if score_rollup.delta > 0 %}up{% elif score_rollup.delta < 0 %}down{% endif %}">
-      {% if score_rollup.delta > 0 %}▲ +{{ score_rollup.delta }}{% elif score_rollup.delta < 0 %}▼ {{ score_rollup.delta }}{% else %}flat{% endif %}
-      from {{ score_rollup.previous }}
-    </span>
-    {% endif %}
-    {% if score_rollup.stale_days is not none %}
-    <span class="pill" style="{% if score_rollup.stale_days >= 14 %}color:var(--down);border-color:#f2c9c9{% endif %}"
-          title="Days since the meeting or email this reading came from — not since you typed the number in">
-      {% if score_rollup.stale_days == 0 %}today{% else %}{{ score_rollup.stale_days }}d ago{% endif %}
-    </span>
-    {% endif %}
-    <span style="font-size:0.74rem;color:var(--neutral);margin-left:auto">
-      latest of {{ score_rollup.count }} scored {% if score_rollup.count == 1 %}activity{% else %}activities{% endif %}
-    </span>
+  {% if activity_age is not none and activity_age >= 14 %}
+  <div class="panel" style="margin-bottom:0.7rem;font-size:0.8rem;color:var(--down)">
+    Nothing has happened here in {{ activity_age }} days. The forecast reads the most recent rated activity and
+    carries no sense of age on its own, so a confident-looking number on a pursuit this quiet is the one to distrust.
   </div>
   {% endif %}
   {% if activity %}
