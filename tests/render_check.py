@@ -214,6 +214,7 @@ cases = [
         "activity_age": 3,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
+        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
         "brief": brief_written, "brief_error": "",
     }),
     # Nothing rated yet, and no activity at all, so the age is None and the
@@ -231,6 +232,7 @@ cases = [
         "activity_age": None, "forecast": forecast_blank,
         "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
+        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
         "brief": brief_empty, "brief_error": "",
     }),
     # Every date null. This is the case the Dates block exists for: the fields
@@ -255,6 +257,7 @@ cases = [
         "activity_age": 0,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
+        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
         # Same migration story as manual_forecast above: brief, brief_model and
         # brief_generated_at are all NULL on every row predating the column,
         # which is every application currently in the Render database.
@@ -270,6 +273,7 @@ cases = [
         "activity_age": 41,
         "forecast": forecast_no_champion, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
+        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
         "brief": brief_stale, "brief_error": "",
     }),
     # A record whose forecast reads high off setup facts alone. The number
@@ -282,6 +286,7 @@ cases = [
         "activity_age": None,
         "forecast": forecast_thin, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
+        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
         "brief": brief_off, "brief_error": "API returned 401: invalid x-api-key",
     }),
     # Meetings and threads are on the record, none of them rated. The panel has
@@ -294,6 +299,29 @@ cases = [
         "activity_age": 3,
         "forecast": forecast_unrated, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
+        # The state the button exists for: threads linked, none read. Also the
+        # only case that renders the result banner, which reports what a press
+        # did even on success -- a thread the model declined leaves Email at
+        # zero, which looks exactly like the button not working.
+        "read_result": "rated 2 threads; found no signal in 1 (left blank on purpose, "
+                       "which keeps email out of the score rather than dragging it down)",
+        "read_enabled": True, "unread_threads": 3, "declined_threads": 0,
+        "brief": brief_off, "brief_error": "",
+    }),
+    # Read, and it honestly found nothing. Email still reads 0.0/10, which is
+    # indistinguishable from "nobody looked" unless the panel says otherwise --
+    # the exact ambiguity fixed one level down and reintroduced here by the
+    # feature that made this state possible.
+    ("application_edit.html (threads read, no signal found)", {
+        "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
+        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "postings": [posting], "activity": activity,
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "activity_age": 3,
+        "forecast": forecast_unrated, "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
+        "read_result": "", "read_enabled": True,
+        "unread_threads": 0, "declined_threads": 2,
         "brief": brief_off, "brief_error": "",
     }),
     ("meeting_edit.html", {

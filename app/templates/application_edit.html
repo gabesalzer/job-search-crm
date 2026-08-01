@@ -266,6 +266,16 @@
         {% if forecast.components.email_quality is not none %}
           Email quality {{ forecast.components.email_quality }} from {{ forecast.components.scored_threads }}
           rated {% if forecast.components.scored_threads == 1 %}thread{% else %}threads{% endif %}.
+        {% elif unread_threads %}
+          {{ unread_threads }} email
+          {% if unread_threads == 1 %}thread has{% else %}threads have{% endif %}
+          never been read — that is why email scores nothing, and the button below fixes it.
+        {% elif declined_threads %}
+          {{ declined_threads }} email
+          {% if declined_threads == 1 %}thread was read and nothing evaluative was found in it{% else %}threads were read and nothing evaluative was found in them{% endif %} —
+          scheduling and logistics, most likely. That is a real answer, not a failure: it leaves email
+          out of the score entirely rather than dragging it down. Disagree by opening one and typing
+          a number, which makes the rating permanently yours.
         {% elif forecast.components.total_threads %}
           {{ forecast.components.total_threads }} email
           {% if forecast.components.total_threads == 1 %}thread is{% else %}threads are{% endif %}
@@ -285,6 +295,25 @@
           Champion not assessed — a blank here is left out of the score entirely, while a deliberate “no” counts against it.
         {% endif %}
       </p>
+      {% if read_result %}
+      <p style="font-size:0.76rem;margin:0.5rem 0 0;padding:0.45rem 0.6rem;border:1px solid var(--line);border-radius:6px">
+        {{ read_result }}
+      </p>
+      {% endif %}
+      {% if read_enabled and unread_threads %}
+      <form method="post" action="/ui/applications/{{ app_obj.id }}/read-threads" style="margin:0.6rem 0 0">
+        <button type="submit" class="linkbtn">
+          Read {{ unread_threads }} unrated email {% if unread_threads == 1 %}thread{% else %}threads{% endif %}
+        </button>
+        <span style="font-size:0.74rem;color:var(--neutral);margin-left:0.5rem">
+          The forecast above is already live — it recomputes on every page load, so there is nothing in it to
+          regenerate. What it is missing is a reading on {% if unread_threads == 1 %}that thread{% else %}those threads{% endif %},
+          and this goes and gets {% if unread_threads == 1 %}it{% else %}them{% endif %} without you re-uploading anything.
+          One API call per thread, a few seconds each. It never touches a rating you entered, and it may
+          honestly come back with “no signal”, which leaves email out of the score rather than dragging it down.
+        </span>
+      </form>
+      {% endif %}
     </div>
   </div>
 </div>

@@ -620,10 +620,32 @@ def edit_application_page(
     # survives the redirect. There's no flash-message machinery in this app and
     # one query param is cheaper than adding some.
     brief_error: str = "",
+    # Same mechanism for the batch thread read below. It reports what it did
+    # even on success, because "nothing visibly changed" is a legitimate and
+    # confusing outcome -- a thread the model declined to score leaves the
+    # Email component at zero, which looks identical to the button not working.
+    read_result: str = "",
     db: Session = Depends(get_db),
 ):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
     return templates.TemplateResponse(request, "application_edit.html", {
+        "read_result": read_result,
+        "read_enabled": llm.enabled(),
+        # How many linked threads a read would actually touch. Drives whether
+        # the button renders at all, so it can never appear on an application
+        # where pressing it would do nothing.
+        "unread_threads": len(_threads_awaiting_a_read(app_obj)),
+        # Threads a read has already answered by declining to score. Without
+        # this the panel cannot tell "nobody has looked" from "something looked
+        # and found nothing", because `email_quality` is None in both -- which
+        # is the same collapse-two-causes-into-one-sentence bug that was fixed
+        # one level down for meetings and threads, reintroduced one level up by
+        # the feature that made the second case possible.
+        "declined_threads": sum(
+            1 for t in app_obj.email_threads
+            if t.rating_source == "model"
+            and t.my_performance is None and t.employer_engagement is None
+        ),
         "active": "board",
         "app_obj": app_obj,
         "stages": STAGE_VALUES,
@@ -650,6 +672,97 @@ def edit_application_page(
         "brief": _brief_state(app_obj),
         "brief_error": brief_error,
     })
+
+
+MAX_THREADS_PER_BATCH = 12
+
+
+def _threads_awaiting_a_read(app_obj) -> list:
+    """The threads on an application that a batch read would actually touch.
+
+    Three exclusions, and the third is the one worth explaining.
+
+    A thread with no body has nothing to read. A thread you rated yourself is
+    never touched by anything, here or elsewhere. And a thread that has
+    *already been read* is skipped too -- including one the model deliberately
+    declined to score, because a decline is an answer and re-asking the same
+    question of the same text is just buying the same answer again.
+
+    That last exclusion is what makes the button idempotent: press it twice and
+    the second press honestly reports that there is nothing left to do, rather
+    than spending money to rewrite values it just wrote. Forcing a fresh read
+    of one thread is still possible -- *Read it again* on the thread itself --
+    which is the right place for it, since wanting a second opinion is a
+    judgment about one conversation rather than about the application.
+    """
+    return [
+        t for t in app_obj.email_threads
+        if (t.body or "").strip()
+        and not _has_human_rating(t)
+        and t.rating_source != "model"
+    ]
+
+
+@router.post("/ui/applications/{application_id}/read-threads")
+def read_application_threads_ui(application_id: int, db: Session = Depends(get_db)):
+    """Read every unrated email thread on this application, in one press.
+
+    This is deliberately *not* a "regenerate forecast" button, though that is
+    what it looks like from the panel it sits in. There is nothing to
+    regenerate: the forecast is arithmetic over stored values, recomputed on
+    every page load and saved nowhere, so a button that recomputed it would be
+    a reload with extra steps. What is actually missing when the Email
+    component reads zero is not a computation, it is evidence -- so the button
+    goes and gets the evidence.
+
+    Per-thread guards are unchanged, because they live in `_read_thread_now`
+    rather than here: a thread you rated yourself is skipped, and so is one
+    with no body. That is the point of the batch being a loop over the single
+    case rather than its own implementation.
+
+    Bounded at `MAX_THREADS_PER_BATCH` because each thread is a separate call
+    that blocks the response. Twelve is already a long wait; an application
+    with more than that reports how many are left rather than silently doing
+    part of the job, since a batch that quietly stopped early would look
+    exactly like one that found nothing to do.
+    """
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    candidates = _threads_awaiting_a_read(app_obj)
+    remaining = max(len(candidates) - MAX_THREADS_PER_BATCH, 0)
+
+    read = declined = failed = 0
+    first_error = ""
+    for thread in candidates[:MAX_THREADS_PER_BATCH]:
+        error = _read_thread_now(thread)
+        if error:
+            failed += 1
+            first_error = first_error or error
+        elif thread.my_performance is None and thread.employer_engagement is None:
+            declined += 1
+        else:
+            read += 1
+    db.commit()
+
+    bits = []
+    if read:
+        bits.append("rated {} thread{}".format(read, "" if read == 1 else "s"))
+    if declined:
+        bits.append(
+            "found no signal in {} (left blank on purpose, which keeps email "
+            "out of the score rather than dragging it down)".format(declined)
+        )
+    if failed:
+        bits.append("{} failed — {}".format(failed, first_error))
+    if remaining:
+        bits.append("{} more still to read; press again".format(remaining))
+    if not bits:
+        bits.append("nothing to read — every thread here is either rated by you already or has no messages")
+
+    return RedirectResponse(
+        url="/applications/{}/edit?read_result={}".format(
+            application_id, quote("; ".join(bits))),
+        status_code=303,
+    )
 
 
 @router.post("/ui/applications/{application_id}/brief/refresh")

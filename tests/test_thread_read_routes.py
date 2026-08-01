@@ -306,6 +306,108 @@ def test_the_edit_page_renders_every_read_state():
     assert "boom" in body
 
 
+def _an_application(title="Batch Read Co"):
+    with SessionLocal() as db:
+        company = models.Company(name=title)
+        db.add(company)
+        db.flush()
+        appn = models.JobApplication(company_id=company.id, title="RevOps Lead")
+        db.add(appn)
+        db.commit()
+        return appn.id
+
+
+def test_the_batch_button_reads_every_unrated_thread_on_an_application():
+    """The whole point: getting email out of 0.0/10 without re-uploading
+    anything. The forecast itself needs no regenerating -- it is arithmetic
+    recomputed on every page load -- so what the button fetches is evidence."""
+    _reset()
+    app_id = _an_application("Batch Read Co A")
+    for _ in range(3):
+        _new_thread(application_id=str(app_id))
+    CALLS["n"] = 0  # creation already read them; pretend they predate the feature
+    with SessionLocal() as db:
+        appn = db.get(models.JobApplication, app_id)
+        for t in appn.email_threads:
+            t.my_performance = t.employer_engagement = None
+            t.rating_source = t.rating_note = t.rating_model = None
+            t.rated_at = None
+        db.commit()
+
+    resp = client.post("/ui/applications/{}/read-threads".format(app_id),
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    assert "read_result" in resp.headers["location"]
+    assert CALLS["n"] == 3
+
+    with SessionLocal() as db:
+        appn = db.get(models.JobApplication, app_id)
+        assert all(t.rating_source == "model" for t in appn.email_threads)
+        out = ui._forecast_for(appn)
+    assert out["components"]["email"] > 0, "email must no longer read 0.0/10"
+
+
+def test_pressing_the_batch_button_twice_does_not_buy_the_same_answer_again():
+    """Idempotence is the difference between a button you can lean on and one
+    that quietly costs money every time you reload a page and press it."""
+    _reset()
+    app_id = _an_application("Batch Read Co B")
+    _new_thread(application_id=str(app_id))
+    CALLS["n"] = 0
+    client.post("/ui/applications/{}/read-threads".format(app_id), follow_redirects=False)
+    first = CALLS["n"]
+    resp = client.post("/ui/applications/{}/read-threads".format(app_id),
+                       follow_redirects=False)
+    assert CALLS["n"] == first, "an already-read thread must not be re-read"
+    assert "nothing+to+read" in resp.headers["location"].replace("%20", "+")
+
+
+def test_the_batch_button_never_touches_a_rating_you_entered():
+    _reset()
+    app_id = _an_application("Batch Read Co C")
+    _new_thread(application_id=str(app_id), my_performance="40", employer_engagement="35")
+    CALLS["n"] = 0
+    client.post("/ui/applications/{}/read-threads".format(app_id), follow_redirects=False)
+    assert CALLS["n"] == 0
+    with SessionLocal() as db:
+        appn = db.get(models.JobApplication, app_id)
+        t = appn.email_threads[0]
+        assert (t.my_performance, t.employer_engagement) == (40, 35)
+        assert t.rating_source is None
+
+
+def test_a_declined_batch_read_says_so_rather_than_looking_broken():
+    """Email stays at zero after a successful press, which is indistinguishable
+    from a no-op unless the page says what happened."""
+    _reset("PERFORMANCE: NONE\nENGAGEMENT: NONE\nREASON: scheduling only")
+    app_id = _an_application("Batch Read Co D")
+    _new_thread(application_id=str(app_id))
+    with SessionLocal() as db:
+        appn = db.get(models.JobApplication, app_id)
+        for t in appn.email_threads:
+            t.rating_source = None
+        db.commit()
+    resp = client.post("/ui/applications/{}/read-threads".format(app_id),
+                       follow_redirects=False)
+    assert "no+signal" in resp.headers["location"].replace("%20", "+")
+
+
+def test_the_button_only_renders_when_it_would_do_something():
+    _reset()
+    app_id = _an_application("Batch Read Co E")
+    tid = _new_thread(application_id=str(app_id))
+    body = client.get("/applications/{}/edit".format(app_id)).text
+    assert "unrated email" not in body, "already read on save; nothing to offer"
+
+    with SessionLocal() as db:
+        t = db.get(models.EmailThread, tid)
+        t.my_performance = t.employer_engagement = None
+        t.rating_source = None
+        db.commit()
+    body = client.get("/applications/{}/edit".format(app_id)).text
+    assert "Read 1 unrated email thread" in body
+
+
 def test_the_forecast_reads_a_model_written_rating_like_any_other():
     """The point of the whole exercise: provenance is a fact about the record,
     not a variable in the arithmetic. `forecast.py` stays stdlib-only and never
