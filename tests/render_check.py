@@ -77,6 +77,11 @@ thread = SimpleNamespace(
     last_message_at=datetime(2026, 6, 22, 14, 30), notes="Follow up next week",
     people=[person], application_id=4, application=app_obj,
     score=55, score_reason="Polite but slow to reply", scored_at=datetime(2026, 6, 22, 15, 0),
+    # The quality pair plus its provenance. This base fixture is a thread you
+    # rated yourself: rating_source is None, which is what every row that
+    # predates the automatic read also carries.
+    my_performance=60, employer_engagement=45,
+    rating_source=None, rating_note=None, rated_at=None, rating_model=None,
 )
 person.email_threads = [thread]
 app_obj.email_threads = [thread]
@@ -421,18 +426,77 @@ cases = [
     ("email_thread_edit.html", {
         "active": "emails", "thread": thread, "people": [person], "applications": [app_obj],
         "selected_person_ids": {person.id},
+        "read_error": "", "read_enabled": True, "has_human_rating": True,
     }),
     ("email_thread_edit.html (no one linked)", {
         "active": "emails",
         "thread": SimpleNamespace(**{**thread.__dict__, "people": []}),
         "people": [person], "applications": [app_obj], "selected_person_ids": set(),
+        "read_error": "", "read_enabled": True, "has_human_rating": True,
     }),
     ("email_thread_edit.html (unscored)", {
         "active": "emails",
         "thread": SimpleNamespace(**{
             **thread.__dict__, "score": None, "score_reason": None, "scored_at": None,
+            "my_performance": None, "employer_engagement": None,
         }),
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
+        "read_error": "", "read_enabled": True, "has_human_rating": False,
+    }),
+    # The four states of the automatic read. All four render a different
+    # sentence in the same box, and three of them are paths a happy-path-only
+    # check would never touch.
+    ("email_thread_edit.html (read automatically)", {
+        "active": "emails",
+        "thread": SimpleNamespace(**{
+            **thread.__dict__,
+            "my_performance": 55, "employer_engagement": 78,
+            "rating_source": "model",
+            "rating_note": "recruiter answered the comp question unprompted and named a date",
+            "rated_at": datetime(2026, 6, 23, 8, 15),
+            "rating_model": "claude-sonnet-5",
+        }),
+        "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
+        "read_error": "", "read_enabled": True, "has_human_rating": False,
+    }),
+    # The model declined both fields. Numbers blank, note present, still
+    # unmistakably a completed read rather than a thread nobody has touched.
+    ("email_thread_edit.html (read, declined to score)", {
+        "active": "emails",
+        "thread": SimpleNamespace(**{
+            **thread.__dict__,
+            "my_performance": None, "employer_engagement": None,
+            "rating_source": "model",
+            "rating_note": "three messages of calendar logistics, nothing evaluative",
+            "rated_at": datetime(2026, 6, 23, 8, 15),
+            "rating_model": "claude-sonnet-5",
+        }),
+        "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
+        "read_error": "", "read_enabled": True, "has_human_rating": False,
+    }),
+    ("email_thread_edit.html (never read, with an error)", {
+        "active": "emails",
+        "thread": SimpleNamespace(**{
+            **thread.__dict__,
+            "my_performance": None, "employer_engagement": None,
+            "rating_source": None, "rating_note": None,
+            "rated_at": None, "rating_model": None,
+        }),
+        "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
+        "read_error": "API returned 401: invalid x-api-key",
+        "read_enabled": True, "has_human_rating": False,
+    }),
+    # No key at all — what anyone cloning the public repo sees.
+    ("email_thread_edit.html (reading disabled)", {
+        "active": "emails",
+        "thread": SimpleNamespace(**{
+            **thread.__dict__,
+            "my_performance": None, "employer_engagement": None,
+            "rating_source": None, "rating_note": None,
+            "rated_at": None, "rating_model": None,
+        }),
+        "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
+        "read_error": "", "read_enabled": False, "has_human_rating": False,
     }),
 ]
 

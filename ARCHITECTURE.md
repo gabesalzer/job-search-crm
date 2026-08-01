@@ -765,6 +765,61 @@ halves — that the counts distinguish the cases, and that counting an unrated
 activity does not score it, since the second is how a wording fix would
 otherwise turn into a way to inflate a record by pasting emails into it.
 
+### Who wrote a rating, and why the column had to exist first
+
+`EmailThread.rating_source` is NULL when you typed the pair and `"model"` when
+an automatic read did. Alongside it, `rating_note` holds the model's one-line
+justification, `rated_at` when it was written, and `rating_model` which model
+wrote it — the same provenance the Brief already carries for its prose.
+
+The column shipped in the same commit as the feature that writes model values,
+which was the only moment it could. Before that commit every value in
+`my_performance` and `employer_engagement` was typed by a human, so
+NULL-means-human is a fact about history. One release later it would have been
+a guess, and an unrecoverable one: there is no way to look at a 78 and tell who
+put it there. Provenance is the kind of thing you cannot add retroactively,
+only going forward, and the temptation to ship the useful part first and the
+bookkeeping after is exactly how a record loses the ability to answer "was I
+right?" — which is the entire reason for keeping it.
+
+The precedence rule is one-directional and permanent. A read fires only into a
+pair that is empty or already model-written; a value you entered is never
+overwritten, and there is no setting that changes that. The mechanism is
+smaller than it sounds: `_hand_edit_claims_the_rating()` compares the submitted
+numbers against the stored ones on every save, and any change hands ownership
+to you and drops the model's note with it — a justification for a 78 is not a
+justification for the 40 you replaced it with. That comparison is doing real
+work rather than being defensive: the edit form pre-fills these inputs and
+submits them back on every save, so without it, fixing a subject line would
+silently relabel a machine's reading as your own judgment.
+
+`_rating()` in `forecast.py` reads neither the source nor the note. The
+forecast takes plain integers and does not know or care where they came from,
+which is what keeps `forecast.py` stdlib-only and keeps provenance a question
+about the record rather than a variable in the arithmetic. The Brief does read
+it, and labels the line accordingly, because a brief that reported a model's 78
+back to you as "my performance" would be putting words in your mouth in a
+document you would have no reason to double-check.
+
+### The read is allowed to say it cannot tell
+
+`thread_read.parse_read()` accepts `NONE` for either number, and the prompt
+asks for it explicitly on threads carrying no evaluative signal — pure
+scheduling, an automated acknowledgement, a single message with no reply yet.
+
+This is the same blank-is-not-zero rule the rest of the app runs on, and it
+would have been easy to lose here. A model asked for a number will almost
+always produce one, and a manufactured 50 on a calendar-logistics thread is
+worse than nothing: it is invented evidence entering a scored field, and the
+forecast has no way to tell it apart from a real reading. Absence, by contrast,
+is a state the model already handles correctly — `W_EMAIL` drops out of the
+`available` denominator and the thread neither helps nor hurts.
+
+A response that parses to nothing at all — no numbers and no reason — writes
+nothing and reports an error. There is no partial save and no defaulting,
+because a wrong number here propagates into the forecast, the board colour and
+every comparison across applications, and it does not look wrong.
+
 ### Champion is tri-state, and the third state is why
 
 `champion` on the Application is a nullable `Boolean`: `True` is "someone
@@ -1011,11 +1066,32 @@ the *app* silently shipping every imported Granola note to an API as a routine
 side effect of ordinary use, with no moment at which anyone chose it.
 
 The Brief keeps the part of that objection worth keeping and drops the part
-that was standing in for it. Nothing is sent on page load, on save, or on
-import. The request happens when a button is pressed, on one application, and
-the panel says in plain text what will be sent before you press it. What
-changed is not the privacy analysis — it is the recognition that "never" was
-doing the work of "not automatically," and that the two are different rules.
+that was standing in for it. The request happens when a button is pressed, on
+one application, and the panel says in plain text what will be sent before you
+press it. What changed is not the privacy analysis — it is the recognition that
+"never" was doing the work of "not automatically," and that the two are
+different rules.
+
+**And then the automatic thread read moved the line again**, so the sentence
+that used to sit here — "nothing is sent on page load, on save, or on import" —
+is no longer true and has been removed rather than quietly narrowed. Saving an
+email thread now sends it. Two of the three cases in that sentence still hold:
+nothing is sent on page load and nothing on import. The third was traded
+deliberately, and it is worth being precise about what was traded for what.
+
+What made it defensible is that the material is different in kind. An email
+thread is a document *addressed to you*, and reading it is the thing it exists
+for. A meeting transcript is a recording of people talking, most of whom never
+considered that it was being written down, let alone processed — which is why
+meetings are still hand-rated and the read is scoped to threads only. That is
+not a temporary scope limit waiting to be widened; it is the boundary itself.
+
+The second reason is that a thread is a complete artifact and a transcript is
+not. The model reading a thread sees exactly what you saw. Your own read of a
+*meeting* carries things the transcript cannot — how the room felt, what a
+pause meant, what you would have done differently — so a model read there
+would be strictly worse information replacing strictly better information,
+which is a bad trade at any privacy price.
 
 What is genuinely given up: interview transcripts contain people who did not
 agree to have their words processed, and pressing the button sends them.

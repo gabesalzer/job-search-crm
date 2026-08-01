@@ -63,14 +63,29 @@ A Firecrawl key is only needed to scrape JavaScript-heavy boards (LinkedIn,
 Indeed, Workday). Company career pages and Greenhouse/Lever/Ashby work without
 one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
 
-### Optional: the Brief
+### Optional: the model-backed features
 
-The Brief panel on an application's edit page calls the Anthropic API. Put
-`ANTHROPIC_API_KEY=sk-ant-...` in `.env` and restart to enable it; set
-`BRIEF_MODEL` too if you want to pin a model other than the default. With no
-key the panel doesn't render at all and the rest of the app is unaffected —
-this is the only feature in the project that sends your data anywhere, it
-never fires on its own, and the button is the only thing that triggers it.
+Two features call the Anthropic API. Put `ANTHROPIC_API_KEY=sk-ant-...` in
+`.env` and restart to enable them; set `BRIEF_MODEL` too if you want to pin a
+model other than the default. With no key, neither renders and the rest of the
+app is entirely unaffected — clone this repo without a key and you get a
+working CRM that never contacts anyone.
+
+These are the only parts of the project that send your data anywhere, and they
+differ in when they fire, which is worth knowing before you turn them on:
+
+- **The Brief** never fires on its own. The button is the only thing that
+  triggers it.
+- **The automatic thread read** fires when you *save* an email thread, without
+  a separate press. Saving a thread sends that thread — and the company, role,
+  stage and your context note for the application it's attached to — and gets
+  back two 0–100 numbers and a one-line reason. It does nothing when you've
+  already rated the thread yourself, nothing on a thread with no body, and
+  nothing on a save that didn't change the messages. Everything already in
+  your database stays untouched until you press *Read it now* on it.
+
+If you'd rather nothing left the box automatically, leave the key unset and
+score threads by hand; every other feature works identically.
 
 ## Usage
 
@@ -114,7 +129,13 @@ never fires on its own, and the button is the only thing that triggers it.
   inferred from their email domain, reusing an existing company if one
   already matches). An application's edit page shows an **Activity** related
   list that merges its meetings and email threads into one chronological
-  timeline.
+  timeline. With `ANTHROPIC_API_KEY` set, saving a thread also **reads** it —
+  the two 0–100 fields the Forecast scores get filled in automatically, with a
+  one-line reason and a visible note saying a machine wrote them. It is allowed
+  to answer "can't tell", which is the right answer for three messages of
+  calendar logistics and leaves email out of the forecast rather than dragging
+  it down. Type over either number and it becomes yours permanently; nothing
+  ever overwrites a rating you entered.
 - **Scoring**: every meeting and email thread can carry a **win-likelihood
   score** — 0–100, your best guess at how likely that application is to end
   up Closed Won given what just happened — plus a one-line reason. The score
@@ -180,9 +201,11 @@ never fires on its own, and the button is the only thing that triggers it.
   application's context and returns its own 0–100 score with a one-line
   reason, in the shape the score fields expect. It's deliberately *not* part
   of the app: it runs in a chat session you start, on material you hand it.
-  Nothing here is automatic — no transcript reaches a model as a side effect
-  of ordinary use, which is the same rule the Brief follows from the other
-  side of the boundary. It's also written to ignore any
+  No *transcript* reaches a model as a side effect of ordinary use — meetings
+  are still yours to judge, and the only automatic read in the app is of email
+  threads, which is a narrower thing on purpose: you were in the room for a
+  meeting and the transcript is missing what you saw, while a thread is a
+  complete artifact. It's also written to ignore any
   score you've already recorded — a second opinion that's read your first one
   isn't one. See [`skills/README.md`](./skills/README.md) to install it.
 - **Editing**: every record type (companies, postings, resumes, applications,

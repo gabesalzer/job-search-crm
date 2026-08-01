@@ -64,10 +64,24 @@ def model_name() -> str:
     return DEFAULT_MODEL
 
 
-def generate(system: str, messages: List[Dict[str, str]]) -> Tuple[str, str]:
+def generate(
+    system: str,
+    messages: List[Dict[str, str]],
+    *,
+    max_tokens: int = MAX_TOKENS,
+    timeout: int = TIMEOUT_SECONDS,
+) -> Tuple[str, str]:
     """POST to the Messages API and return (text, model_used).
 
     Raises LLMError with something readable on any failure.
+
+    Both budgets are overridable because the two callers wait very differently.
+    The Brief is a button you pressed and are watching, on a packet that can
+    carry several full transcripts, so three minutes is a reasonable ceiling.
+    The thread read fires when you *save* a thread, on one much smaller packet
+    that returns three lines — and a save that appears to hang for three
+    minutes reads as a crashed app, which is a worse failure than not getting
+    the reading. The defaults are the Brief's, so that caller is unchanged.
     """
     if not enabled():
         raise LLMError(
@@ -85,16 +99,16 @@ def generate(system: str, messages: List[Dict[str, str]]) -> Tuple[str, str]:
             },
             json={
                 "model": DEFAULT_MODEL,
-                "max_tokens": MAX_TOKENS,
+                "max_tokens": max_tokens,
                 "system": system,
                 "messages": messages,
             },
-            timeout=TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except httpx.TimeoutException:
         raise LLMError(
             "The request timed out after {}s. A very long transcript can do "
-            "this; try again.".format(TIMEOUT_SECONDS)
+            "this; try again.".format(timeout)
         )
     except httpx.HTTPError as exc:
         raise LLMError("Could not reach the API: {}".format(exc))

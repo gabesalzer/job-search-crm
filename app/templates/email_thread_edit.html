@@ -93,12 +93,60 @@
         did its job. Email is weighted at a third of a meeting and on its own budget, so a scheduling reply can
         never replace a panel's reading.
       </p>
+      <div style="margin-top:0.7rem;padding:0.6rem 0.75rem;border:1px solid var(--line);border-radius:8px">
+        {% if thread.rating_source == 'model' %}
+          <p style="font-size:0.78rem;margin:0">
+            {% if thread.my_performance is none and thread.employer_engagement is none %}
+              <strong>Read automatically, and it declined to score this one.</strong>
+            {% else %}
+              <strong>These two were read automatically.</strong>
+            {% endif %}
+            {% if thread.rated_at %}{{ thread.rated_at.strftime("%b %d, %Y") }}{% endif %}
+            {% if thread.rating_model %}· {{ thread.rating_model }}{% endif %}
+          </p>
+          {% if thread.rating_note %}
+          <p style="font-size:0.78rem;color:var(--neutral);margin:0.3rem 0 0">“{{ thread.rating_note }}”</p>
+          {% endif %}
+          <p style="font-size:0.74rem;color:var(--neutral);margin:0.35rem 0 0">
+            {% if thread.my_performance is none and thread.employer_engagement is none %}
+              Blank is a real answer here — a thread with nothing evaluative in it leaves email out of the
+              forecast entirely rather than dragging it down. Type a number if you disagree.
+            {% else %}
+              Change either number and it becomes yours — the note above is dropped with it, and nothing will
+              overwrite it again.
+            {% endif %}
+          </p>
+        {% elif has_human_rating %}
+          <p style="font-size:0.78rem;margin:0">These are your own judgment. Nothing will overwrite them.</p>
+        {% elif read_enabled %}
+          <p style="font-size:0.78rem;margin:0">Not read yet.</p>
+          <p style="font-size:0.74rem;color:var(--neutral);margin:0.3rem 0 0">
+            New threads are read when you save them. This one predates that, or its read failed.
+          </p>
+        {% else %}
+          <p style="font-size:0.78rem;margin:0">Automatic reading is off — no <code>ANTHROPIC_API_KEY</code> is set.</p>
+        {% endif %}
+        {% if read_error %}
+          <p style="font-size:0.76rem;color:var(--danger,#b91c1c);margin:0.4rem 0 0">{{ read_error }}</p>
+        {% endif %}
+        {% if read_enabled and not has_human_rating %}
+          <button type="submit" form="read-thread" class="btn secondary"
+                  style="font-size:0.78rem;padding:0.35rem 0.6rem;margin-top:0.5rem">
+            {% if thread.rating_source == 'model' %}Read it again{% else %}Read it now{% endif %}
+          </button>
+        {% endif %}
+      </div>
     </div>
     <div style="margin-top:0.7rem;display:flex;gap:0.6rem">
       <button class="btn" type="submit">Save changes</button>
       <a class="btn secondary" href="/email-threads">Cancel</a>
     </div>
   </form>
+  {# Sits outside the edit form on purpose: forms cannot nest, and the button
+     above reaches it by id. Submitting this must not carry the edit form's
+     fields, or an unsaved change in the textarea would be read and then
+     thrown away. #}
+  <form id="read-thread" method="post" action="/ui/email-threads/{{ thread.id }}/read"></form>
   <form method="post" action="/ui/email-threads/{{ thread.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
         onsubmit="return confirm('Delete this email thread ({{ thread.subject or 'Untitled' }})? This cannot be undone.');">
     <button type="submit" class="linkbtn danger">Delete this email thread</button>

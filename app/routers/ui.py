@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 from .. import brief as brief_model
 from .. import forecast as forecast_model
 from .. import models
+from .. import thread_read
 from ..database import get_db
 from ..services import granola, llm
 from ..services.email_parse import parse_gmail_export
@@ -136,6 +137,137 @@ def _apply_activity_quality(obj, my_performance: str, employer_engagement: str) 
     """
     obj.my_performance = _parse_score(my_performance)
     obj.employer_engagement = _parse_score(employer_engagement)
+
+
+def _has_human_rating(thread) -> bool:
+    """Has a person put a number in this thread's quality pair.
+
+    `rating_source` is NULL for a human value and "model" for a read one, so
+    "there is a value and nobody has claimed it for the model" is the test. It
+    also answers correctly for every row that predates the column: before the
+    automatic read existed, every value in these fields was typed by hand, so
+    NULL-means-human is a fact about history rather than an assumption.
+
+    One case it deliberately cannot distinguish: clearing both halves of a
+    model-written pair leaves a thread that looks exactly like one nobody ever
+    rated, so a later body edit will read it again. Storing "the human said
+    blank" would need a fourth state on top of a tri-state, and the cheaper
+    answer is that re-reads only fire on a body change or a button press, so a
+    thread you cleared stays cleared unless you change the messages in it.
+    """
+    if thread.rating_source == "model":
+        return False
+    return thread.my_performance is not None or thread.employer_engagement is not None
+
+
+def _hand_edit_claims_the_rating(thread, before_perf, before_eng) -> bool:
+    """Transfer ownership of the pair to you the moment you change it.
+
+    Returns whether ownership moved, which the caller needs in order to skip
+    the automatic read on the same request. Without that, clearing both numbers
+    while also editing the body put the model's numbers straight back: the
+    clear correctly released ownership, `_has_human_rating` then correctly saw
+    an unrated thread, and the body change fired a read into it. Three correct
+    steps composing into exactly the behaviour the feature promises never
+    happens. A save in which you touched these fields is a save where your
+    judgment wins, whatever else changed alongside it.
+
+    The edit form pre-fills these inputs with whatever is stored, including a
+    model-written pair, and submits them back unchanged on an ordinary save.
+    Without this check every save of an unrelated field -- fixing a subject
+    line, relinking a person -- would silently relabel a machine's reading as
+    your own judgment, which is precisely the confusion `rating_source` was
+    added to prevent.
+
+    So: identical values leave ownership alone, and a changed value takes it.
+    The model's note goes with the numbers, because a justification for a 78
+    is not a justification for the 40 you replaced it with.
+    """
+    if (thread.my_performance == before_perf
+            and thread.employer_engagement == before_eng):
+        return False
+    thread.rating_source = None
+    thread.rating_note = None
+    thread.rated_at = None
+    thread.rating_model = None
+    return True
+
+
+def _read_thread_now(thread) -> Optional[str]:
+    """Ask the model to rate one thread, and write the result. Returns an error.
+
+    Returns None on success (including the success case where the model
+    declined to score and only a note was stored), or a human-readable string
+    when the call or the parse failed. Nothing is written on failure.
+
+    This is the only place in the app that sends data to a third party without
+    a button press behind it -- it fires when you save a thread. Three guards
+    keep that narrow: it does nothing without a key, nothing without a body,
+    and nothing at all if you have already formed your own view. A human
+    rating is never overwritten, by this or by anything else.
+    """
+    if not llm.enabled():
+        return "Automatic reading is off — no ANTHROPIC_API_KEY is set."
+    if not (thread.body or "").strip():
+        return "There are no messages in this thread to read."
+    if _has_human_rating(thread):
+        return "You have already rated this thread; a read would not overwrite it."
+
+    payload = thread_read.build_read_payload(
+        subject=thread.subject,
+        body=thread.body,
+        participants=thread.participants,
+        started_at=thread.started_at,
+        last_message_at=thread.last_message_at,
+        company=(thread.application.company.name
+                 if thread.application and thread.application.company else None),
+        role_title=thread.application.title if thread.application else None,
+        stage=(thread.application.stage.value
+               if thread.application and thread.application.stage else None),
+        context=thread.application.context if thread.application else None,
+    )
+    try:
+        text, model_used = llm.generate(
+            thread_read.SYSTEM_PROMPT,
+            thread_read.build_messages(payload),
+            # Three lines back, so the token ceiling is a runaway guard rather
+            # than a shape constraint. The timeout is short because you are
+            # sitting on a save, not watching a Brief render: a form that
+            # appears to hang for three minutes reads as a crashed app, and
+            # losing the reading is much cheaper than that.
+            max_tokens=300,
+            timeout=60,
+        )
+    except llm.LLMError as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001 -- see below
+        # Deliberately broad. `llm.generate` promises LLMError but cannot fully
+        # deliver: a 200 response whose body is not JSON raises ValueError out
+        # of `resp.json()`, and anything escaping here would propagate out of
+        # the POST handler *before* its `db.commit()`, rolling back the user's
+        # entire edit. Losing a reading is a small failure; losing the subject
+        # line they just fixed because a proxy returned an HTML error page is
+        # not, and it is not a failure they could connect to a cause.
+        return "The read failed unexpectedly: {}".format(exc)
+
+    perf, eng, note, understood = thread_read.parse_read(text)
+    if not understood:
+        # Nothing recognisable came back, or only half of it did. Write nothing
+        # rather than a guess -- a wrong number here propagates into the
+        # forecast, the board colour and every comparison across applications,
+        # and it does not look wrong. A half-parsed reply is the worse case:
+        # `_rating` promotes a lone surviving number to the whole reading.
+        return "The model's reply could not be read as a rating."
+
+    thread.my_performance = perf
+    thread.employer_engagement = eng
+    thread.rating_note = note
+    thread.rating_source = "model"
+    # Aware, matching every other `_utcnow`-stamped column. `_naive_utc()`
+    # flattens it before anything compares it against a form-entered date.
+    thread.rated_at = datetime.now(timezone.utc)
+    thread.rating_model = model_used
+    return None
 
 
 def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
@@ -318,6 +450,11 @@ def _brief_payload_for(app_obj: models.JobApplication) -> str:
                 "notes": t.notes,
                 "score": t.score,
                 "score_reason": t.score_reason,
+                "my_performance": t.my_performance,
+                "employer_engagement": t.employer_engagement,
+                # Passed so the packet can label whose reading it is. See
+                # brief._rating_label.
+                "rating_source": t.rating_source,
             }
             for t in app_obj.email_threads
         ],
@@ -1429,11 +1566,23 @@ def create_email_thread_ui(
     thread.people = resolved_people
     db.add(thread)
     db.commit()
+    # Read it now, while the thread is new and you have not formed a view. Any
+    # failure is swallowed rather than blocking the redirect: the thread itself
+    # saved fine, and the edit page reports the read's state plainly with a
+    # "Read it now" button beside it, so a silent failure shows up as "not read
+    # yet" next to the thing that retries it.
+    _read_thread_now(thread)
+    db.commit()
     return RedirectResponse(url="/email-threads", status_code=303)
 
 
 @router.get("/email-threads/{thread_id}/edit")
-def edit_email_thread_page(thread_id: int, request: Request, db: Session = Depends(get_db)):
+def edit_email_thread_page(
+    thread_id: int,
+    request: Request,
+    read_error: str = "",
+    db: Session = Depends(get_db),
+):
     thread = _get_or_404(db, models.EmailThread, thread_id)
     return templates.TemplateResponse(request, "email_thread_edit.html", {
         "active": "emails",
@@ -1441,7 +1590,33 @@ def edit_email_thread_page(thread_id: int, request: Request, db: Session = Depen
         "people": db.query(models.Person).order_by(models.Person.name).all(),
         "applications": db.query(models.JobApplication).all(),
         "selected_person_ids": {p.id for p in thread.people},
+        # The automatic read on save swallows its errors so a failed API call
+        # cannot cost you a saved thread. The button below does not: when you
+        # asked for it, you are owed the reason it did not happen.
+        "read_error": read_error,
+        "read_enabled": llm.enabled(),
+        "has_human_rating": _has_human_rating(thread),
     })
+
+
+@router.post("/ui/email-threads/{thread_id}/read")
+def read_email_thread_ui(thread_id: int, db: Session = Depends(get_db)):
+    """Read this thread on demand — the backfill path for everything that was
+    already in the database before the automatic read existed, and the retry
+    for anything whose read failed.
+
+    It obeys exactly the same guard as the automatic path: a rating you typed
+    is never overwritten, so pressing this on a thread you have already judged
+    does nothing at all. Re-reading a model-written rating is fine and replaces
+    it, since nothing of yours is at stake.
+    """
+    thread = _get_or_404(db, models.EmailThread, thread_id)
+    error = _read_thread_now(thread)
+    db.commit()
+    url = "/email-threads/{}/edit".format(thread_id)
+    if error:
+        url += "?read_error=" + quote(error)
+    return RedirectResponse(url=url, status_code=303)
 
 
 @router.post("/ui/email-threads/{thread_id}/edit")
@@ -1475,6 +1650,8 @@ def update_email_thread_ui(
     submits the currently-checked people back as an explicit selection.
     """
     thread = _get_or_404(db, models.EmailThread, thread_id)
+    before_perf, before_eng = thread.my_performance, thread.employer_engagement
+    body_before = thread.body
     extracted = _extract_upload_text(file)
     body_text = extracted or (body or "").strip()
     parsed = parse_gmail_export(body_text) if extracted else {
@@ -1492,6 +1669,13 @@ def update_email_thread_ui(
     thread.notes = notes or None
     _apply_score(thread, score, score_reason)
     _apply_activity_quality(thread, my_performance, employer_engagement)
+    claimed = _hand_edit_claims_the_rating(thread, before_perf, before_eng)
+    # Re-read only when the messages themselves changed, and never on a save
+    # where you touched the ratings yourself. Saving a subject fix or relinking
+    # a person must not cost an API call, and the previous read is still a
+    # correct read of a body nobody touched.
+    if not claimed and (thread.body or "") != (body_before or ""):
+        _read_thread_now(thread)
     db.commit()
     return RedirectResponse(url="/email-threads", status_code=303)
 

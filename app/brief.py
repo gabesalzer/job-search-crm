@@ -89,6 +89,20 @@ def _line(label: str, value: Any) -> Optional[str]:
     return "{}: {}".format(label, value)
 
 
+def _rating_label(field: str, activity: Dict[str, Any]) -> str:
+    """Name a rating's author in the label itself.
+
+    An activity's quality pair can be written by hand or by an automated read
+    of the thread, and the packet has to say which. Attributing a machine's
+    number to the candidate would produce a brief that quotes their own
+    judgment back at them when they never formed one -- the exact failure the
+    `rating_source` column exists to make impossible everywhere else.
+    """
+    if activity.get("rating_source") == "model":
+        return "{} (0-100, read automatically, not the candidate's own)".format(field)
+    return "{} (0-100)".format(field)
+
+
 def _block(title: str, lines: List[Optional[str]]) -> Optional[str]:
     """Render a section, or nothing at all when it has no content.
 
@@ -213,6 +227,19 @@ def build_brief_payload(
                 _line("Participants", t.get("participants")),
                 _line("My score", t.get("score")),
                 _line("My reason for that score", t.get("score_reason")),
+                # The same pair a meeting carries. These were added to
+                # EmailThread in the score consolidation and this builder was
+                # not updated with it, so for one release a rated thread was
+                # visible to the forecast and invisible here -- the brief could
+                # describe a conversation while missing the only judgment
+                # anyone had recorded about it.
+                #
+                # Labelled by who wrote them, because a thread rating can now be
+                # machine-written. A brief that reported a model's 78 back to
+                # the candidate as "my performance" would be putting words in
+                # their mouth, and they would have no way to notice.
+                _line(_rating_label("My performance", t), t.get("my_performance")),
+                _line(_rating_label("Their engagement", t), t.get("employer_engagement")),
                 _line("My notes", _clip(t.get("notes"), MAX_NOTE_CHARS)),
             ],
             "verbatim_label": "Thread body",

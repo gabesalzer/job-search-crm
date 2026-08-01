@@ -689,6 +689,37 @@ class EmailThread(Base):
     my_performance = Column(Integer)        # 0-100: how well what I sent landed
     employer_engagement = Column(Integer)   # 0-100: how interested they were
 
+    # --- Who wrote the pair above -------------------------------------------
+    #
+    # NULL means you did. "model" means a Brief read did, on save or on demand.
+    #
+    # This column had to land in the same commit as the feature that writes
+    # model values, not after it. Before that feature exists every value in
+    # those two columns is yours by definition, so NULL-means-human is a fact
+    # about history rather than a guess. One release later it would have been a
+    # guess, and an unrecoverable one -- there is no way to look at a 78 and
+    # tell who put it there.
+    #
+    # A human value is never overwritten. The read only fires into a pair that
+    # is either empty or already model-written, so typing a number here is
+    # permanent in the sense that matters: nothing in the app will silently
+    # replace it. That is also what keeps the record worth keeping. These
+    # fields exist so you can check your own judgment against outcomes later,
+    # and a field that might have been quietly rewritten answers a different
+    # and much less useful question.
+    #
+    # One column for the pair rather than one each, because the read writes
+    # both or neither -- there is no path that produces a model performance and
+    # a human engagement on the same thread.
+    rating_source = Column(String(16))      # NULL = you, "model" = a Brief read
+    # The model's own one-line justification. Deliberately NOT `score_reason`,
+    # which belongs to the flat win-likelihood score and stays your words --
+    # overwriting your sentence with a machine's would be a worse theft than
+    # overwriting the number.
+    rating_note = Column(Text)
+    rated_at = Column(DateTime)             # when the pair was written
+    rating_model = Column(String(64))       # which model, mirroring brief_model
+
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 

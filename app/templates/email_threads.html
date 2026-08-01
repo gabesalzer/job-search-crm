@@ -73,8 +73,11 @@
     <div style="display:flex;justify-content:space-between;gap:0.5rem;align-items:start">
       <strong>{{ t.subject or "Untitled thread" }}</strong>
       <span style="display:flex;gap:0.4rem;align-items:center;white-space:nowrap">
-        {% if t.my_performance is not none %}<span class="pill" title="How well what I sent landed">me {{ t.my_performance }}</span>{% endif %}
-        {% if t.employer_engagement is not none %}<span class="pill" title="How engaged they were">them {{ t.employer_engagement }}</span>{% endif %}
+        {% set auto = t.rating_source == 'model' %}
+        {% set whose = "read automatically" + (": " + t.rating_note if t.rating_note else "") if auto else "your own judgment" %}
+        {% if t.my_performance is not none %}<span class="pill" title="How well what I sent landed — {{ whose }}">me {{ t.my_performance }}{% if auto %} ·{% endif %}</span>{% endif %}
+        {% if t.employer_engagement is not none %}<span class="pill" title="How engaged they were — {{ whose }}">them {{ t.employer_engagement }}{% if auto %} ·{% endif %}</span>{% endif %}
+        {% if auto and t.my_performance is none and t.employer_engagement is none %}<span class="pill" title="Read automatically and declined to score: {{ t.rating_note or 'no evaluative signal' }}">read · no signal</span>{% endif %}
         {% if t.score is not none %}<span class="pill" title="Win-likelihood score{% if t.score_reason %}: {{ t.score_reason }}{% endif %}">{{ t.score }}</span>{% endif %}
         {% if t.last_message_at %}<span style="font-size:0.78rem;color:var(--muted)">{{ t.last_message_at.strftime("%b %d, %Y") }}</span>{% endif %}
       </span>

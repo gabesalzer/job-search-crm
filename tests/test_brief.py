@@ -190,6 +190,36 @@ def test_scores_and_reasons_reach_the_packet():
     assert "85" in out
 
 
+def test_a_threads_ratings_reach_the_packet_too():
+    """The regression this pins: `my_performance` and `employer_engagement` were
+    added to EmailThread in the score consolidation and the packet builder kept
+    emitting only the flat score, so a rated thread was visible to the forecast
+    and invisible to the brief. Asserted on the decomposed pair specifically --
+    the flat score already passed before the fix, which is exactly why nothing
+    caught it."""
+    out = b.build_brief_payload(email_threads=[{
+        "last_message_at": JAN,
+        "subject": "Scope and timeline",
+        "score": 61,
+        "score_reason": "answered the comp question without being asked twice",
+        "my_performance": 55,
+        "employer_engagement": 78,
+    }])
+    assert "My performance (0-100): 55" in out
+    assert "Their engagement (0-100): 78" in out
+
+
+def test_a_zero_rating_on_a_thread_is_not_dropped_as_falsy():
+    """Same invariant the score fields hold everywhere else. A thread where they
+    went completely silent is a 0 for engagement and a real reading; dropping it
+    as falsy would make the packet say nothing was recorded."""
+    out = b.build_brief_payload(email_threads=[{
+        "last_message_at": JAN, "employer_engagement": 0, "my_performance": 0,
+    }])
+    assert "Their engagement (0-100): 0" in out
+    assert "My performance (0-100): 0" in out
+
+
 def test_zero_score_is_not_dropped_as_falsy():
     """Blank and 0 are opposite claims here, same invariant the forecast holds."""
     out = b.build_brief_payload(meetings=[{"meeting_date": JAN, "score": 0}])
