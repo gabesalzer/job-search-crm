@@ -464,6 +464,17 @@ def automated_forecast(
         "fit_band": fit_band(index),
         "scored_meetings": scored_meetings,
         "scored_threads": scored_threads,
+        # How many exist at all, rated or not. `scored_*` alone cannot answer
+        # "is there anything here", and the difference matters to whoever reads
+        # the breakdown even though it does not matter to the arithmetic. A
+        # zero because nothing is linked is a data-entry gap; a zero because
+        # nothing is rated is a judgment not yet made. Both earn no points and
+        # both drop their weight out of `available` -- absence of evidence is
+        # not evidence either way -- but they call for different actions, and a
+        # breakdown that renders them with one sentence sends you looking in
+        # the wrong place.
+        "total_meetings": len(meetings),
+        "total_threads": len(threads),
         # How many of the 100 points were even in play. Shown so "46" can be
         # read as "46 of a possible 50" rather than as a flat failure.
         "available": available,
@@ -552,6 +563,7 @@ def _no_components() -> dict:
         "quality": None, "email_quality": None,
         "fit_index": None, "fit_band": None,
         "scored_meetings": 0, "scored_threads": 0,
+        "total_meetings": 0, "total_threads": 0,
         "available": 0,
     }
 

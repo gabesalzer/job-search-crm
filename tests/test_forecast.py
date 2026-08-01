@@ -671,6 +671,54 @@ def test_the_weight_budgets_cannot_be_overspent():
     assert out["total_known"] <= 100
 
 
+def test_the_breakdown_can_tell_nothing_linked_from_nothing_rated():
+    """`scored_meetings` and `scored_threads` are both 0 in two situations that
+    call for opposite actions -- there is nothing here, versus there is
+    something here you have not judged yet. The arithmetic is identical either
+    way and should be; the sentence the breakdown renders should not be, and it
+    needs a count of what exists in order to say which one it is looking at."""
+    nothing = f.automated_forecast(stage="Discovery", source="Referral")
+    unrated = f.automated_forecast(
+        stage="Discovery", source="Referral", meetings=[m()], threads=[th(), th()])
+
+    assert nothing["components"]["total_meetings"] == 0
+    assert nothing["components"]["total_threads"] == 0
+    assert unrated["components"]["total_meetings"] == 1
+    assert unrated["components"]["total_threads"] == 2
+
+    # Indistinguishable on the old fields, which is the whole point.
+    for out in [nothing, unrated]:
+        assert out["components"]["scored_meetings"] == 0
+        assert out["components"]["scored_threads"] == 0
+
+
+def test_counting_an_unrated_activity_does_not_score_it():
+    """The counts are for the reader, not the arithmetic. Logging a thread you
+    have not judged must not move the number, must not put its weight into the
+    denominator, and must not lift confidence -- otherwise fixing the wording
+    would quietly become a way to inflate a record by pasting emails into it."""
+    nothing = f.automated_forecast(stage="Discovery", source="Referral")
+    unrated = f.automated_forecast(
+        stage="Discovery", source="Referral", threads=[th(), th(), th()])
+
+    assert unrated["components"]["email"] == 0.0
+    assert unrated["components"]["email_quality"] is None
+    assert unrated["components"]["available"] == nothing["components"]["available"]
+    assert unrated["total"] == nothing["total"]
+    assert unrated["total_known"] == nothing["total_known"]
+    assert unrated["confidence"] == nothing["confidence"]
+
+
+def test_the_counts_survive_the_closed_short_circuits():
+    """Same contract as every other component key: a template reading
+    `total_threads` must not raise on a won or lost application, which build
+    their components dict from a different function."""
+    for stage in ["Closed Won", "Closed Lost"]:
+        out = f.automated_forecast(stage=stage, source="Referral", threads=[th()])
+        assert out["components"]["total_meetings"] == 0
+        assert out["components"]["total_threads"] == 0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

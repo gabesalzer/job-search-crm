@@ -255,14 +255,26 @@
         {% if forecast.components.quality is not none %}
           Meeting quality {{ forecast.components.quality }} from {{ forecast.components.scored_meetings }}
           rated {% if forecast.components.scored_meetings == 1 %}meeting{% else %}meetings{% endif %}.
+        {% elif forecast.components.total_meetings %}
+          {{ forecast.components.total_meetings }}
+          {% if forecast.components.total_meetings == 1 %}meeting is{% else %}meetings are{% endif %}
+          on this application and none carries a rating — open one and fill in <em>my performance</em>
+          and <em>their engagement</em> (or the win-likelihood score) to give this something to read.
         {% else %}
-          No meeting has a performance or engagement rating yet — add them on a meeting to give this something to read.
+          No meeting is on this application yet, so there is nothing for the meetings component to read.
         {% endif %}
         {% if forecast.components.email_quality is not none %}
           Email quality {{ forecast.components.email_quality }} from {{ forecast.components.scored_threads }}
           rated {% if forecast.components.scored_threads == 1 %}thread{% else %}threads{% endif %}.
+        {% elif forecast.components.total_threads %}
+          {{ forecast.components.total_threads }} email
+          {% if forecast.components.total_threads == 1 %}thread is{% else %}threads are{% endif %}
+          linked here and none carries a rating — open one and fill in <em>my performance</em> and
+          <em>their engagement</em> (or the win-likelihood score) to put email into the score.
         {% else %}
-          No email thread has been rated.
+          No email thread is linked to this application. A thread only counts here once its
+          <em>Application</em> field points at this record — one created from a paste or an upload
+          without that field set exists, but not for this forecast.
         {% endif %}
         {% if forecast.components.fit_band %}
           Resume/JD overlap {{ forecast.components.fit_band }} ({{ forecast.components.fit_index }}).

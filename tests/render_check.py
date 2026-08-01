@@ -142,6 +142,21 @@ forecast_no_champion = forecast_model.automated_forecast(
                "employer_engagement": 15}],
 )
 
+# Activity exists and none of it is rated. Scores exactly like the empty state
+# and must not read like it: `forecast_blank` renders "nothing is linked here"
+# while this one has to render "these are here and you haven't judged them".
+# The two branches are indistinguishable on `scored_meetings`/`scored_threads`,
+# which is why the counts exist and why both shapes are rendered.
+forecast_unrated = forecast_model.automated_forecast(
+    stage="Discovery", source="Referral",
+    meetings=[{"when": datetime(2026, 3, 10), "my_performance": None,
+               "employer_engagement": None, "score": None}],
+    threads=[{"when": datetime(2026, 3, 22), "my_performance": None,
+              "employer_engagement": None, "score": None},
+             {"when": datetime(2026, 3, 25), "my_performance": None,
+              "employer_engagement": None, "score": None}],
+)
+
 FORECAST_WEIGHTS = {
     "stage": forecast_model.W_STAGE,
     "meetings": forecast_model.W_MEETINGS,
@@ -263,6 +278,18 @@ cases = [
         "forecast": forecast_thin, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "brief": brief_off, "brief_error": "API returned 401: invalid x-api-key",
+    }),
+    # Meetings and threads are on the record, none of them rated. The panel has
+    # to say that rather than repeating the empty state's "nothing is linked".
+    ("application_edit.html (activity, none of it rated)", {
+        "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
+        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "postings": [posting], "activity": activity,
+        "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+        "activity_age": 3,
+        "forecast": forecast_unrated, "forecast_values": FORECAST_VALUES,
+        "forecast_weights": FORECAST_WEIGHTS,
+        "brief": brief_off, "brief_error": "",
     }),
     ("meeting_edit.html", {
         "active": "meetings", "meeting": meeting, "applications": [app_obj],

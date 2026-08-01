@@ -742,6 +742,29 @@ question actually got answered, whether they moved something forward unprompted
 — but it is thin evidence next to an hour of conversation, and weighting it
 like conversation would let inbox activity impersonate progress.
 
+A thread only earns anything once it carries a rating. `activity_quality()`
+returns `None` when nothing on the thread side yields a `_rating()` — no
+`employer_engagement`, no `my_performance`, and no fallback `score` — and in
+that case the email component is zeroed *and* `W_EMAIL` drops out of the
+`available` denominator, so an unrated thread neither helps nor hurts. It also
+earns no depth credit, deliberately: depth is credit for how much evidence you
+have, and an unread thread is not evidence.
+
+That is correct arithmetic and it produced a genuinely bad sentence. The panel
+used to render one line — *"No email thread has been rated"* — across two very
+different situations: no thread is linked to this application at all, and
+threads are linked and none of them has been judged. The first is a data-entry
+gap you fix on the thread's Application field; the second is a judgment you
+make on the thread itself. `scored_threads` is `0` in both, so the template had
+no way to tell them apart, and reading the panel sent you to the wrong screen.
+`components["total_meetings"]` and `components["total_threads"]` exist for that
+one purpose: they count what is on the record regardless of whether it carries
+a reading, they are never consulted by the arithmetic, and they let the
+breakdown name which of the two zeroes it is looking at. The tests pin both
+halves — that the counts distinguish the cases, and that counting an unrated
+activity does not score it, since the second is how a wording fix would
+otherwise turn into a way to inflate a record by pasting emails into it.
+
 ### Champion is tri-state, and the third state is why
 
 `champion` on the Application is a nullable `Boolean`: `True` is "someone
