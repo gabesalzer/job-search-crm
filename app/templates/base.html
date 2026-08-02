@@ -5,89 +5,191 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Job Search CRM{% endblock %}</title>
 <style>
+  /* --- Design tokens -----------------------------------------------------
+     Everything below is expressed in these. The point is not tidiness: before
+     this block there were nine ad-hoc font sizes (0.7, 0.72, 0.74, 0.76, 0.78,
+     0.82, 0.86, 0.9, 1.05rem) chosen one at a time, and inconsistent spacing
+     is the single loudest tell that a UI was assembled rather than designed.
+     A small fixed scale removes the decision from every future edit. */
   :root{
-    --bg:#fafafa; --panel:#ffffff; --ink:#18181b; --muted:#6b7280; --line:#e5e7eb;
-    --accent:#2456e6; --up:#0a7d33; --down:#c02626; --neutral:#9ca3af; --radius:10px;
+    --bg:#f7f7f8; --panel:#ffffff; --ink:#18181b; --muted:#6b7280; --line:#e5e7eb;
+    --line-strong:#d4d4d8;
+    --accent:#2456e6; --accent-soft:#eef2fe;
+    --up:#0a7d33; --down:#c02626; --neutral:#9ca3af;
+
+    /* Type: seven steps, nothing between them. */
+    --fs-2xs:0.6875rem; --fs-xs:0.75rem; --fs-sm:0.8125rem; --fs-md:0.875rem;
+    --fs-lg:1rem; --fs-xl:1.25rem; --fs-2xl:1.5rem;
+
+    /* Space: a 4px grid. Every margin and padding is one of these. */
+    --s-1:0.25rem; --s-2:0.5rem; --s-3:0.75rem; --s-4:1rem;
+    --s-5:1.5rem; --s-6:2rem; --s-7:3rem;
+
+    --radius-sm:6px; --radius:8px; --radius-lg:12px;
+
+    /* Two elevations, used consistently: resting and lifted. A surface that
+       changes shadow on hover is most of what makes an interface feel alive. */
+    --shadow-sm:0 1px 2px rgba(24,24,27,0.05);
+    --shadow-md:0 2px 4px rgba(24,24,27,0.06), 0 4px 12px rgba(24,24,27,0.05);
+    --ring:0 0 0 3px rgba(36,86,230,0.25);
+    --ease:150ms cubic-bezier(0.4,0,0.2,1);
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-       background:var(--bg);color:var(--ink);line-height:1.45;font-size:14px}
+       background:var(--bg);color:var(--ink);line-height:1.5;font-size:var(--fs-md);
+       -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
   a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
-  header.topbar{display:flex;align-items:center;gap:1.6rem;padding:0.85rem 1.4rem;
-    background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
-  .brand{font-weight:650} .brand .dot{color:var(--accent)}
-  header.topbar nav{display:flex;gap:1.2rem}
-  header.topbar nav a{color:var(--muted);padding:0.2rem 0}
-  header.topbar nav a.active{color:var(--ink);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
-  main{padding:1.6rem 1.4rem;max-width:1440px;margin:0 auto}
-  h1{font-size:1.3rem;margin:0 0 0.2rem} .subtitle{color:var(--muted);margin:0 0 1.3rem}
-  .btn{display:inline-block;background:var(--accent);color:#fff;border:none;border-radius:8px;
-    padding:0.5rem 0.9rem;font-size:0.86rem;cursor:pointer;font-family:inherit}
-  .btn:hover{opacity:0.93} .btn.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
-  input,select,textarea{font:inherit;font-size:0.86rem;padding:0.48rem 0.6rem;border:1px solid var(--line);
-    border-radius:8px;background:#fff;color:var(--ink);width:100%}
-  label{display:block;font-size:0.76rem;color:var(--muted);margin-bottom:0.22rem}
+  /* One visible focus treatment for everything, and only for keyboard users.
+     Its absence is invisible until you try to use the app without a mouse,
+     at which point nothing tells you where you are. */
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--radius-sm)}
+  button,a,input,select,textarea{transition:background var(--ease),border-color var(--ease),
+    color var(--ease),box-shadow var(--ease),opacity var(--ease)}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+  header.topbar{display:flex;align-items:center;gap:var(--s-5);padding:0 var(--s-5);height:52px;
+    background:rgba(255,255,255,0.85);backdrop-filter:saturate(180%) blur(12px);
+    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .brand{font-weight:650;letter-spacing:-0.01em} .brand .dot{color:var(--accent)}
+  header.topbar nav{display:flex;gap:var(--s-1)}
+  /* Nav items are now targets rather than bare text: a hover state on the pill
+     tells you the whole row is clickable without having to try it. */
+  header.topbar nav a{color:var(--muted);padding:var(--s-1) var(--s-3);border-radius:var(--radius-sm);
+    font-size:var(--fs-sm);font-weight:500}
+  header.topbar nav a:hover{color:var(--ink);background:var(--bg);text-decoration:none}
+  header.topbar nav a.active{color:var(--accent);background:var(--accent-soft);font-weight:600}
+  main{padding:var(--s-6) var(--s-5);max-width:1440px;margin:0 auto}
+  h1{font-size:var(--fs-2xl);margin:0 0 var(--s-1);letter-spacing:-0.02em;font-weight:650}
+  .subtitle{color:var(--muted);margin:0 0 var(--s-5);font-size:var(--fs-sm);max-width:78ch}
+  .btn{display:inline-flex;align-items:center;gap:var(--s-1);background:var(--accent);color:#fff;
+    border:1px solid transparent;border-radius:var(--radius);padding:var(--s-2) var(--s-3);
+    font-size:var(--fs-sm);font-weight:550;cursor:pointer;font-family:inherit;
+    box-shadow:var(--shadow-sm)}
+  .btn:hover{background:#1d49c9;text-decoration:none}
+  .btn:active{transform:translateY(0.5px)}
+  .btn.secondary{background:#fff;color:var(--ink);border-color:var(--line-strong)}
+  .btn.secondary:hover{background:var(--bg);border-color:var(--neutral)}
+  input,select,textarea{font:inherit;font-size:var(--fs-sm);padding:var(--s-2) var(--s-3);
+    border:1px solid var(--line-strong);border-radius:var(--radius);background:#fff;
+    color:var(--ink);width:100%}
+  input:hover,select:hover,textarea:hover{border-color:var(--neutral)}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+  label{display:block;font-size:var(--fs-xs);color:var(--muted);margin-bottom:var(--s-1);font-weight:500}
   .field{margin-bottom:0.2rem}
-  details.newform{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-    padding:0.4rem 1rem;margin-bottom:1.3rem}
-  details.newform summary{cursor:pointer;font-weight:550;padding:0.5rem 0;list-style:none}
+  details.newform{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);
+    padding:0 var(--s-4);margin-bottom:var(--s-5);box-shadow:var(--shadow-sm)}
+  details.newform summary{cursor:pointer;font-weight:550;padding:var(--s-3) 0;list-style:none;
+    font-size:var(--fs-sm)}
   details.newform summary::-webkit-details-marker{display:none}
   details.newform summary::before{content:"+ ";color:var(--accent);font-weight:700}
   details.newform[open] summary::before{content:"– "}
-  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.7rem;
-    align-items:end;padding:0.4rem 0 0.9rem}
-  .board{display:flex;gap:0.85rem;overflow-x:auto;padding-bottom:1rem}
-  .col{flex:0 0 248px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-    display:flex;flex-direction:column;max-height:calc(100vh - 230px)}
-  .col h2{font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);
-    margin:0;padding:0.7rem 0.8rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
-  .col .count{color:var(--neutral)}
-  .col .cards{padding:0.55rem;overflow-y:auto;flex:1;min-height:48px}
-  .card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:0.6rem 0.65rem;
-    margin-bottom:0.5rem;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
-  .card:active{cursor:grabbing}
-  .card .title{font-weight:600;margin-bottom:0.12rem}
-  .card .co{color:var(--muted);font-size:0.82rem}
-  .card .metarow{margin-top:0.45rem;display:flex;gap:0.3rem;flex-wrap:wrap}
-  .card .scorerow{margin-top:0.4rem;display:flex;gap:0.35rem;align-items:baseline}
-  .card .score{font-size:1.05rem;font-weight:650;line-height:1}
-  .card .age{font-size:0.7rem;color:var(--neutral);margin-left:auto;white-space:nowrap}
+  details.newform summary:hover{color:var(--accent)}
+  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--s-3);
+    align-items:end;padding:var(--s-1) 0 var(--s-4)}
+
+  /* --- Board ------------------------------------------------------------ */
+  .board{display:flex;gap:var(--s-3);overflow-x:auto;padding-bottom:var(--s-4);
+    scroll-snap-type:x proximity}
+  /* 264px rather than 248px, and the extra 16px is not what fixed the
+     wrapping. Titles were wrapping to three lines because the Edit/Delete
+     block sat in the same flex row and took its width away -- widening the
+     column would have paid for that with a whole visible stage on an
+     eight-stage board that already scrolls. Lifting the actions out of flow
+     (below) gives the title the full card width back, which is worth more
+     than the pixels and costs nothing. */
+  .col{flex:0 0 264px;background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius-lg);display:flex;flex-direction:column;
+    max-height:calc(100vh - 230px);scroll-snap-align:start}
+  .col h2{font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);
+    margin:0;padding:var(--s-3) var(--s-3);border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;font-weight:650}
+  .col .count{color:var(--neutral);font-variant-numeric:tabular-nums}
+  .col .cards{padding:var(--s-2);overflow-y:auto;flex:1;min-height:48px;
+    display:flex;flex-direction:column;gap:var(--s-2)}
+  .card{position:relative;background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    padding:var(--s-3);cursor:grab;box-shadow:var(--shadow-sm);
+    transition:box-shadow var(--ease),border-color var(--ease),transform var(--ease)}
+  /* Out of flow, so the title measures against the whole card. The backdrop is
+     what lets them sit over a long title without becoming unreadable. */
+  .card .row-actions{position:absolute;top:var(--s-2);right:var(--s-2);margin-top:0;
+    gap:var(--s-2);background:#fff;padding:2px var(--s-2);border-radius:var(--radius-sm);
+    box-shadow:var(--shadow-sm);border:1px solid var(--line)}
+  .card:hover{box-shadow:var(--shadow-md);border-color:var(--line-strong)}
+  .card:active{cursor:grabbing;transform:scale(0.995)}
+  /* `balance` splits an unavoidable wrap evenly instead of leaving one orphan
+     word on line two, which is most of why the old cards looked untended. */
+  .card .title{font-weight:600;margin-bottom:1px;line-height:1.35;text-wrap:balance}
+  .card .co{color:var(--muted);font-size:var(--fs-sm)}
+  .card .metarow{margin-top:var(--s-2);display:flex;gap:var(--s-1);flex-wrap:wrap;align-items:center}
+  .card .scorerow{margin-top:var(--s-3);display:flex;gap:var(--s-2);align-items:baseline}
+  /* The headline number was the same weight as a job title, so a 38 and a 79
+     read identically at a glance -- on a board whose entire purpose is
+     comparing them side by side. Tabular figures stop it jittering between
+     two- and three-digit values as you drag cards around. */
+  .card .score{font-size:var(--fs-xl);font-weight:680;line-height:1;letter-spacing:-0.02em;
+    font-variant-numeric:tabular-nums}
+  .card .score-unit{font-size:var(--fs-2xs);color:var(--neutral);font-weight:500;
+    letter-spacing:0.02em;text-transform:uppercase}
+  .card .age{font-size:var(--fs-2xs);color:var(--neutral);margin-left:auto;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
   /* A reading this old is a claim about a situation that has probably moved on,
      so it reads as a warning rather than as reassuring supporting detail. */
   .card .age.stale{color:var(--down)}
-  .col.over{background:#f0f4ff;outline:2px dashed var(--accent);outline-offset:-4px}
-  .empty{color:var(--neutral);text-align:center;padding:1rem 0.4rem;font-size:0.82rem}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0.9rem}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:0.9rem 1rem}
-  .pill{display:inline-block;font-size:0.7rem;padding:0.1rem 0.5rem;border-radius:999px;
-    border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .col.over{background:var(--accent-soft);outline:2px dashed var(--accent);outline-offset:-4px}
+  .empty{color:var(--neutral);text-align:center;padding:var(--s-4) var(--s-2);font-size:var(--fs-xs)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s-3);
+    align-items:start}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);
+    padding:var(--s-4);box-shadow:var(--shadow-sm)}
+  .grid .panel{transition:box-shadow var(--ease),border-color var(--ease)}
+  .grid .panel:hover{box-shadow:var(--shadow-md);border-color:var(--line-strong)}
+  .pill{display:inline-flex;align-items:center;gap:var(--s-1);font-size:var(--fs-2xs);
+    padding:1px var(--s-2);border-radius:999px;border:1px solid var(--line);color:var(--muted);
+    white-space:nowrap;background:#fff;font-variant-numeric:tabular-nums}
+  /* Machine-written readings are marked with a dot rather than a word, so the
+     pill stays the size of a number. The trailing "·" this replaces rendered
+     as a bare stray character and read as a typo. */
+  .pill.auto::after{content:"";width:5px;height:5px;border-radius:50%;
+    background:var(--accent);opacity:0.55;flex:0 0 auto}
   .pill.up{color:var(--up);border-color:#bfe6c9;background:#f0faf3}
   .pill.down{color:var(--down);border-color:#f2c9c9;background:#fdf1f1}
-  .tag{font-size:0.7rem;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:0.04rem 0.4rem}
+  .tag{font-size:var(--fs-2xs);color:var(--muted);border:1px solid var(--line);
+    border-radius:var(--radius-sm);padding:1px var(--s-2);background:var(--bg);white-space:nowrap}
   /* Forecast badge. Deliberately not a traffic light: Pipeline is the residual
      bucket, not a failure, and colouring it red would make "no signal yet" read
      as bad news on every application's first day. Commit gets the only strong
      colour, because it's the only one making a strong claim. */
-  .fc{display:inline-block;font-size:0.7rem;font-weight:600;letter-spacing:0.01em;
-    padding:0.1rem 0.45rem;border-radius:6px;border:1px solid var(--line);
+  .fc{display:inline-block;font-size:var(--fs-2xs);font-weight:650;letter-spacing:0.01em;
+    padding:1px var(--s-2);border-radius:var(--radius-sm);border:1px solid var(--line);
     color:var(--muted);white-space:nowrap}
   .fc-commit{color:var(--up);border-color:#bfe6c9;background:#f0faf3}
   .fc-best-case{color:#8a5a00;border-color:#f0dcb4;background:#fdf8ee}
   .fc-pipeline{color:var(--muted);background:#f7f7f8}
   .fc-closed{color:var(--neutral);background:#f7f7f8}
   .fc-manual{color:var(--muted);background:#fff;border-style:dashed}
-  .rating-row{display:flex;gap:0.35rem;margin-top:0.6rem;align-items:center}
-  .ratebtn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:0.28rem 0.55rem;
-    cursor:pointer;font-size:0.9rem;line-height:1;font-family:inherit}
-  .ratebtn.up:hover{border-color:var(--up);color:var(--up)}
-  .ratebtn.down:hover{border-color:var(--down);color:var(--down)}
-  .ratebtn.neutral:hover{border-color:var(--neutral)}
-  .linkbtn{background:none;border:none;padding:0;font:inherit;font-size:0.78rem;color:var(--accent);
+  .rating-row{display:flex;gap:var(--s-1);margin-top:var(--s-3);align-items:center}
+  .ratebtn{border:1px solid var(--line-strong);background:#fff;border-radius:var(--radius-sm);
+    padding:var(--s-1) var(--s-2);cursor:pointer;font-size:var(--fs-md);line-height:1;font-family:inherit}
+  .ratebtn.up:hover{border-color:var(--up);color:var(--up);background:#f0faf3}
+  .ratebtn.down:hover{border-color:var(--down);color:var(--down);background:#fdf1f1}
+  .ratebtn.neutral:hover{border-color:var(--neutral);background:var(--bg)}
+  .linkbtn{background:none;border:none;padding:0;font:inherit;font-size:var(--fs-xs);color:var(--accent);
     cursor:pointer;text-decoration:none;width:auto}
   .linkbtn:hover{text-decoration:underline}
-  .linkbtn.danger{color:var(--down)}
+  /* Destructive actions are not coloured until you reach for them. Rendering
+     every Delete in red made the most dangerous control the most eye-catching
+     thing on a board of otherwise identical cards -- the opposite of what
+     colour is for. */
+  .linkbtn.danger{color:var(--muted)}
+  .linkbtn.danger:hover{color:var(--down)}
   .inline-form{display:inline}
-  .row-actions{margin-top:0.4rem;display:flex;gap:0.7rem;align-items:center;font-size:0.78rem}
+  .row-actions{margin-top:var(--s-2);display:flex;gap:var(--s-3);align-items:center;font-size:var(--fs-xs)}
+  /* Row actions recede until the row they belong to is engaged. They stay
+     reachable by keyboard (focus-within) and are always visible where hover
+     does not exist, so this is a de-emphasis rather than a hiding place. */
+  .card .row-actions,.grid .panel .row-actions{opacity:0;transition:opacity var(--ease)}
+  .card:hover .row-actions,.card:focus-within .row-actions,
+  .grid .panel:hover .row-actions,.grid .panel:focus-within .row-actions{opacity:1}
+  @media (hover:none){.card .row-actions,.grid .panel .row-actions{opacity:1}}
 </style>
 </head>
 <body>
