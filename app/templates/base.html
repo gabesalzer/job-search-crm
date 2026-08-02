@@ -27,6 +27,16 @@
 
     --radius-sm:6px; --radius:8px; --radius-lg:12px;
 
+    /* Column widths for record pages. These were seven different hardcoded
+       inline values (640/680/720/760px) chosen one page at a time, which is
+       both why the edit pages looked lost on a wide monitor and why widening
+       them used to mean seven separate edits.
+       Two widths rather than one, because forms and prose want opposite
+       things: a four-column field grid needs room, while a paragraph past
+       roughly 75 characters a line gets measurably harder to read. So the
+       column is wide and the prose inside it is capped separately. */
+    --w-edit:1080px; --w-prose:74ch;
+
     /* Two elevations, used consistently: resting and lifted. A surface that
        changes shadow on hover is most of what makes an interface feel alive. */
     --shadow-sm:0 1px 2px rgba(24,24,27,0.05);
@@ -83,8 +93,22 @@
   details.newform summary::before{content:"+ ";color:var(--accent);font-weight:700}
   details.newform[open] summary::before{content:"– "}
   details.newform summary:hover{color:var(--accent)}
-  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--s-3);
-    align-items:end;padding:var(--s-1) 0 var(--s-4)}
+  /* `start`, not `end`. Bottom-aligning fields works only while they are all
+     the same height, and they are not: several carry a paragraph of help text
+     underneath, so a row with one long explanation pushed its neighbours down
+     and the grid stopped reading as rows at all. Top-aligned, the inputs line
+     up and the help hangs below each one. */
+  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--s-4) var(--s-3);
+    align-items:start;padding:var(--s-1) 0 var(--s-4)}
+  .form-grid .field > p,.form-grid .field > small{margin:var(--s-1) 0 0;font-size:var(--fs-2xs);
+    color:var(--neutral);line-height:1.45}
+
+  /* Record pages: one column class instead of an inline max-width per page. */
+  .editcol{max-width:var(--w-edit)}
+  .section{max-width:var(--w-edit);margin-top:var(--s-5)}
+  .section > h2{font-size:var(--fs-lg);margin:0 0 var(--s-1);letter-spacing:-0.01em}
+  /* Explanatory prose is capped independently of the column it sits in. */
+  .section > p,.prose{max-width:var(--w-prose)}
 
   /* --- Board ------------------------------------------------------------ */
   .board{display:flex;gap:var(--s-3);overflow-x:auto;padding-bottom:var(--s-4);

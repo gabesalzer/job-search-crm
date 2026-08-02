@@ -4,7 +4,7 @@
 <h1>Edit application</h1>
 <p class="subtitle"><a href="/board">← Back to Pipeline</a></p>
 
-<div class="panel" style="max-width:720px">
+<div class="panel editcol">
   <form method="post" action="/ui/applications/{{ app_obj.id }}/edit" id="editAppForm">
     <div class="form-grid">
       <div class="field">
@@ -139,7 +139,7 @@
   </form>
 </div>
 
-<div style="max-width:720px;margin-top:1.4rem">
+<div class="section">
   <h2 style="font-size:1rem;margin:0 0 0.4rem">Brief</h2>
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     How this started and what's happened since, written by a model from this application's record — the fields
@@ -204,7 +204,7 @@
   </div>
 </div>
 
-<div style="max-width:720px;margin-top:1.4rem">
+<div class="section">
   <h2 style="font-size:1rem;margin:0 0 0.4rem">Forecast</h2>
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     One read, from six inputs: how far the pursuit has gotten, how the meetings went, how the email threads went,
@@ -318,7 +318,7 @@
   </div>
 </div>
 
-<div style="max-width:720px;margin-top:1.4rem">
+<div class="section">
   <h2 style="font-size:1rem;margin:0 0 0.4rem">Stage history <span style="color:var(--neutral);font-weight:400">({{ app_obj.stage_history|length }})</span></h2>
   <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem">
     Each row is when a stage change was logged in the app, which is often later than when it actually happened.
@@ -343,7 +343,7 @@
   {% endif %}
 </div>
 
-<div style="max-width:720px;margin-top:1.4rem">
+<div class="section">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.5rem">
     <h2 style="font-size:1rem;margin:0">Activity <span style="color:var(--neutral);font-weight:400">({{ activity|length }})</span></h2>
     <div style="display:flex;gap:0.5rem">

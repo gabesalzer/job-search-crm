@@ -4,7 +4,7 @@
 <h1>Edit resume</h1>
 <p class="subtitle"><a href="/resumes">← Back to Resumes</a></p>
 
-<div class="panel" style="max-width:720px">
+<div class="panel editcol">
   <form method="post" action="/ui/resumes/{{ resume.id }}/edit" enctype="multipart/form-data">
     <div class="form-grid">
       <div class="field"><label>Label</label><input name="label" value="{{ resume.label }}" required></div>

@@ -4,7 +4,7 @@
 <h1>Edit person</h1>
 <p class="subtitle"><a href="/people">← Back to People</a></p>
 
-<div class="panel" style="max-width:680px">
+<div class="panel editcol">
   <form method="post" action="/ui/people/{{ person.id }}/edit">
     <div class="form-grid">
       <div class="field"><label>Name</label><input name="name" value="{{ person.name }}" required></div>
@@ -56,7 +56,7 @@
   </form>
 </div>
 
-<div style="max-width:680px;margin-top:1.4rem">
+<div class="section">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem">
     <h2 style="font-size:1rem;margin:0">Email threads <span style="color:var(--neutral);font-weight:400">({{ person.email_threads|length }})</span></h2>
     <a href="/email-threads?person_id={{ person.id }}" class="btn secondary" style="font-size:0.8rem;padding:0.35rem 0.7rem">+ Log an email thread</a>

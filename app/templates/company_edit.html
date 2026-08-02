@@ -4,7 +4,7 @@
 <h1>Edit company</h1>
 <p class="subtitle"><a href="/companies">← Back to Companies</a></p>
 
-<div class="panel" style="max-width:640px">
+<div class="panel editcol">
   <form method="post" action="/ui/companies/{{ company.id }}/edit">
     <div class="form-grid">
       <div class="field"><label>Name</label><input name="name" value="{{ company.name }}" required></div>
