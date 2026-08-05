@@ -1053,9 +1053,13 @@ and regex out the enum members.
 
 Every Application can carry a generated two-section summary — *How this
 started* and *What's happened so far* — written by a model from that
-application's own record. It is the only feature in this project that sends
-your data to a third party, and the only one whose content did not come from
-you.
+application's own record. It was the first feature in this project to send
+your data to a third party, and the first whose content did not come from you.
+Two more have followed — the automatic thread read below, and **Ask**, which
+sends the entire pipeline on every question. The line has now moved three
+times, always deliberately and always at a pressed button or a save you
+performed; each move is recorded where it happened rather than smoothed over
+in hindsight.
 
 ### This reverses a boundary the rest of this document defends
 
@@ -1085,6 +1089,12 @@ for. A meeting transcript is a recording of people talking, most of whom never
 considered that it was being written down, let alone processed — which is why
 meetings are still hand-rated and the read is scoped to threads only. That is
 not a temporary scope limit waiting to be widened; it is the boundary itself.
+
+That boundary is about what fires *automatically*. **Ask** does send meeting
+transcripts, and does not contradict this: it fires only when you type a
+question and press a button, which is the Brief's contract rather than the
+thread read's. The rule that survived all three moves is not "transcripts stay
+in" — it is "nothing leaves without a moment at which you chose it".
 
 The second reason is that a thread is a complete artifact and a transcript is
 not. The model reading a thread sees exactly what you saw. Your own read of a
@@ -1193,6 +1203,114 @@ It matters more here, because this is the function that decides what leaves the
 box — a mirror that had drifted would prove the wrong function safe. The HTTP
 call lives in `app/services/llm.py`, which knows nothing about job
 applications and only takes a system prompt and messages.
+
+## Ask (chat over the whole record)
+
+The third and widest place data leaves the box, and the first feature that
+reads *across* applications. Everything else in this app answers a question
+about one record: the board shows a column of cards, the Brief writes up one
+pursuit, the forecast scores one application. "Which of these has gone quiet",
+"what concerns came up about my fit", "who mentioned budget pressure" are all
+questions whose answer lives in no single record, and before this there was no
+way to ask them except by opening twelve pages and holding it in your head.
+
+### The scope was chosen with the alternatives on the table
+
+Three designs were considered and the widest was picked deliberately.
+
+**Structured queries only** — translate the question into a database query,
+send back rows. Cheap, sends almost nothing, and answers "how many are in
+Discovery" perfectly. It cannot answer "what did Dana say about the
+territory", which is most of what the record is *for*: the transcripts are the
+part that cost something to collect.
+
+**Retrieval** — embed every transcript, fetch the few passages that look
+relevant, send only those. This is the standard answer and it is a real
+option. It was rejected for this dataset because it is optimising the wrong
+axis. Retrieval exists because a corpus cannot fit in a context window; a job
+search comfortably can, and every retrieval design pays for that saving in
+recall failures which are invisible — the model answers confidently from four
+passages without knowing a fifth existed. "No thread mentions comp" is a
+sentence this feature must never say wrongly, and retrieval is exactly the
+architecture that says it wrongly.
+
+**Everything, every question** — what was built. It sends the most and it is
+the only one that can be complete.
+
+The privacy cost is real and is not hidden: the transcripts contain third
+parties who never agreed to be read this way. That cost is paid at a pressed
+button, on a page that states what it sends and how many applications that is,
+and the same fence-and-instruct pattern the Brief uses applies here.
+
+### The budget, and why it is spent newest-first
+
+`MAX_TOTAL_CHARS` caps the packet at roughly 90k tokens. A dozen applications
+with full transcripts can run several times that, so something has to give,
+and *what* gives is a design decision rather than a truncation.
+
+Structured facts about every application always go in — the index line, stage,
+source, champion, dates, counts, your own ratings and reasons. They are small,
+and they are what most questions actually need. Verbatim text then fills what
+remains, sorted by recency across the entire pipeline, not within each
+application. So a packet under pressure drops a recruiter screen from March
+before it drops last week's onsite, even when the March one belongs to a
+different company.
+
+Dropped text is replaced by a sentence saying it was dropped, and the prompt
+instructs the model to mention that when it bears on the answer. Silently
+missing evidence is the failure mode that makes a tool like this untrustworthy:
+the answer looks identical whether the transcript was read and had nothing in
+it or was never sent.
+
+### Prompt caching is what makes it affordable
+
+The corpus is byte-identical between questions until the underlying data
+changes, so it goes in its own system block marked `cache_control: ephemeral`
+and the instructions go in a separate uncached block in front of it. The first
+question of a sitting pays to write the cache; the rest read it back at a
+fraction of the input price. Without this, ten questions bill the entire
+pipeline ten times, which is the difference between a feature you use and one
+you ration — and a feature you ration stops being a place you think.
+
+Two consequences worth knowing. Editing the system prompt does not invalidate
+the expensive half, which is why the blocks are split that way rather than
+concatenated. And the conversation history sits *after* the cached block, so
+it is billed fresh every turn — which is why it is capped at
+`CHAT_HISTORY_TURNS` rather than replayed whole.
+
+`llm.generate` takes an optional `usage_out` dict and the token counts are
+stored on the assistant row as JSON. That is diagnostic, not data: a cache that
+has silently stopped working looks exactly like a cache that is working,
+except on the bill.
+
+### `ChatMessage` has no foreign key, on purpose
+
+It is the thinnest table in the schema and relates to nothing. A question is
+almost never about exactly one application — "which of these has gone quiet"
+spans the pipeline — so hanging the transcript off one record would be a lie
+about what was asked. It is a log of a conversation, not a child of a record.
+
+There is one conversation rather than many. A `conversation_id` was considered
+and left out: one person asking about one job search does not need threading,
+and adding it would put a picker, a list page and a "which conversation"
+question into every route to buy a distinction that never comes up. If it ever
+does, a nullable column added by `ensure_schema()` covers it without a rewrite.
+
+*Clear conversation* is a real `DELETE`, not a hidden flag. It is the only
+place in this app that throws data away on purpose, and it earns that: the
+transcript accumulates quoted fragments of other people's emails and
+interviews, so being able to empty it in one click is part of what makes the
+feature defensible.
+
+### `app/chat.py` imports nothing from the app
+
+Same guarantee as `forecast.py` and `brief.py`, and it matters most here. This
+is the function that decides what leaves the box, and it is the widest such
+decision in the project — so it is a plain function over plain dicts that
+`tests/test_chat.py` exercises with literals. The ORM walking lives in
+`_chat_corpus()` in `ui.py`, and is covered separately by
+`tests/test_chat_routes.py` against the running app, because an adapter is
+precisely the kind of code that reads correct and isn't.
 
 ## Context vs. notes on an Application
 

@@ -732,6 +732,45 @@ class EmailThread(Base):
     )
 
 
+class ChatMessage(Base):
+    """One turn of the chat, stored so the conversation survives a page load.
+
+    Deliberately the thinnest table in the schema, and deliberately not related
+    to anything else. It has no FK to an application because a question is
+    almost never about exactly one -- "which of these has gone quiet" spans the
+    whole pipeline, and hanging the transcript off one row would make that a
+    lie. It is a log of a conversation, not a child of a record.
+
+    There is one conversation, not many. A `conversation_id` was considered and
+    left out: this is a single-user app with one person asking questions about
+    one job search, and threading would add a picker, a list page and a
+    "which conversation" question to every route in exchange for a distinction
+    that never comes up. If it ever does, a nullable column added by
+    `ensure_schema()` covers it without a rewrite.
+
+    Nothing here is sent to the model except `role` and `content`, capped to
+    the last few turns -- see `chat.build_messages`. The rest is for the page.
+
+    `usage` holds the token counts the API reported for the turn that produced
+    an assistant message, as a JSON blob rather than four columns. It is
+    diagnostic, not data: the only question it exists to answer is whether
+    prompt caching is still working, because a cache that has silently stopped
+    working looks exactly like one that is working, except on the bill.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True)
+    role = Column(String(16), nullable=False)      # "user" | "assistant"
+    content = Column(Text, nullable=False)
+    # Which model answered. Same reason as `brief_model`: the record of what
+    # wrote something should say what actually wrote it, not what was asked
+    # for, since an alias resolves to a dated snapshot.
+    model = Column(String(64))
+    usage = Column(Text)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 # --------------------------------------------------------------------------- #
 # Auto stage-history: record every change to JobApplication.stage
 # --------------------------------------------------------------------------- #

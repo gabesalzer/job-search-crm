@@ -18,7 +18,7 @@ prompt and messages and returns text.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -65,13 +65,24 @@ def model_name() -> str:
 
 
 def generate(
-    system: str,
+    system,
     messages: List[Dict[str, str]],
     *,
     max_tokens: int = MAX_TOKENS,
     timeout: int = TIMEOUT_SECONDS,
+    usage_out: Optional[Dict[str, int]] = None,
 ) -> Tuple[str, str]:
     """POST to the Messages API and return (text, model_used).
+
+    `system` is either a plain string or a list of content blocks. The list
+    form exists for prompt caching: the chat feature sends the entire job
+    search on every question, and marking that block `ephemeral` is what makes
+    the second question cost a tenth of the first. The API accepts both, so
+    the Brief's string is passed through untouched.
+
+    `usage_out`, when given, is filled with the token counts from the
+    response. Worth surfacing because a cache that silently stops working
+    looks exactly like a cache that is working, except for the bill.
 
     Raises LLMError with something readable on any failure.
 
@@ -129,6 +140,11 @@ def generate(
         )
 
     data = resp.json()
+    if usage_out is not None:
+        usage = data.get("usage") or {}
+        for key in ("input_tokens", "output_tokens",
+                    "cache_creation_input_tokens", "cache_read_input_tokens"):
+            usage_out[key] = usage.get(key) or 0
     parts = [
         block.get("text", "")
         for block in data.get("content", [])

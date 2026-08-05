@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Ask — Job Search CRM{% endblock %}
+{% block body %}
+<style>
+  /* Narrower than the record pages on purpose. This is reading, not scanning
+     a grid, and the prose cap that applies inside a Brief panel applies to a
+     whole page of answers with more force. */
+  .chatcol{max-width:var(--w-edit);margin:0 auto}
+  .turns{display:flex;flex-direction:column;gap:var(--s-4);margin-bottom:var(--s-6)}
+  .turn{display:flex;flex-direction:column;gap:var(--s-1)}
+  .turn .who{font-size:var(--fs-2xs);color:var(--neutral);text-transform:uppercase;
+    letter-spacing:0.04em;font-weight:600}
+  /* The question is set apart rather than styled like a chat bubble. Bubbles
+     imply a peer conversation; this is closer to a notebook where you wrote a
+     question and the answer came back underneath it. */
+  .turn.you .bubble{background:var(--accent-soft);border:1px solid #dbe3fb;
+    border-radius:var(--radius-lg);padding:var(--s-3) var(--s-4);
+    font-size:var(--fs-md);font-weight:500}
+  .turn.model .bubble{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius-lg);padding:var(--s-4);box-shadow:var(--shadow-sm)}
+  .turn.model .bubble p{margin:0 0 var(--s-3);max-width:var(--w-prose);
+    font-size:var(--fs-md);line-height:1.6}
+  .turn.model .bubble p:last-child{margin-bottom:0}
+  .turn .prov{font-size:var(--fs-2xs);color:var(--neutral);
+    font-variant-numeric:tabular-nums}
+  .composer{position:sticky;bottom:0;background:var(--bg);padding:var(--s-4) 0 var(--s-5);
+    border-top:1px solid var(--line)}
+  .composer textarea{min-height:76px;resize:vertical}
+  .composerrow{display:flex;gap:var(--s-2);align-items:flex-start;margin-top:var(--s-2)}
+  .composerrow .note{font-size:var(--fs-2xs);color:var(--neutral);max-width:64ch;
+    line-height:1.5}
+  .startpoints{margin:var(--s-4) 0 0;display:flex;gap:var(--s-2);flex-wrap:wrap}
+  .startpoints button{background:#fff;border:1px solid var(--line-strong);
+    border-radius:999px;padding:var(--s-1) var(--s-3);font-size:var(--fs-xs);
+    color:var(--muted);cursor:pointer;font-family:inherit}
+  .startpoints button:hover{border-color:var(--neutral);color:var(--ink)}
+  .warn{background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius);
+    padding:var(--s-3) var(--s-4);margin-bottom:var(--s-5);font-size:var(--fs-sm)}
+</style>
+
+<div class="chatcol">
+  <h1>Ask</h1>
+  <p class="subtitle">
+    Questions about the whole pipeline, answered from what's recorded in it —
+    what someone said in an interview, which pursuits have gone quiet, a draft
+    of a follow-up in your own words. It answers from the record only, and says
+    so when the record doesn't cover it.
+  </p>
+
+  {% if error %}
+    <div class="warn"><strong>Couldn't answer.</strong> {{ error }}</div>
+  {% endif %}
+
+  {% if not chat_enabled %}
+    <div class="warn">
+      <strong>Not configured.</strong> Set <code>ANTHROPIC_API_KEY</code> in the
+      Render dashboard (or your local <code>.env</code>) and restart. Everything
+      else in the app works without it.
+    </div>
+  {% endif %}
+
+  {% if messages %}
+    <div class="turns">
+      {% for m in messages %}
+        <div class="turn {% if m.role == 'user' %}you{% else %}model{% endif %}">
+          <div class="who">{% if m.role == 'user' %}You{% else %}Answer{% endif %}</div>
+          <div class="bubble">
+            {% for para in m.content.split('\n\n') %}
+              {% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}
+            {% endfor %}
+          </div>
+          {% if m.role != 'user' and m.model %}
+            <div class="prov">{{ m.model }}{% if m.created_at %} · {{ m.created_at.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty" style="padding:var(--s-6) 0">Nothing asked yet.</div>
+  {% endif %}
+
+  <div class="composer">
+    <form method="post" action="/ui/chat" id="askform">
+      <textarea name="question" id="question" placeholder="Ask about anything in the pipeline…"
+                {% if not chat_enabled %}disabled{% endif %}></textarea>
+      <div class="composerrow">
+        <button type="submit" class="btn" {% if not chat_enabled %}disabled{% endif %}>Ask</button>
+        <p class="note" style="margin:0">
+          Each question sends all {{ application_count }}
+          application{% if application_count != 1 %}s{% endif %} — including full
+          meeting transcripts and email bodies — to {{ model_name }}. Answers are
+          stored here until you clear them.
+        </p>
+      </div>
+    </form>
+
+    {% if not messages %}
+      <div class="startpoints">
+        <button type="button" data-q="Which pursuits have gone quiet, and for how long?">What's gone quiet?</button>
+        <button type="button" data-q="Across every interview, what concerns or objections came up about my fit?">Concerns raised about me</button>
+        <button type="button" data-q="Where does each application stand right now? One line each.">Where everything stands</button>
+        <button type="button" data-q="What did I commit to doing that I haven't done yet?">Loose ends I owe</button>
+      </div>
+    {% endif %}
+
+    {% if messages %}
+      <form method="post" action="/ui/chat/clear" style="margin-top:var(--s-3)"
+            onsubmit="return confirm('Delete the whole conversation? This cannot be undone.')">
+        <button type="submit" class="linkbtn">Clear conversation</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Starter questions fill the box rather than submitting. Sending an API
+  // request on a single click, before you have read what it asks, is the wrong
+  // default for a button that costs money.
+  document.querySelectorAll('.startpoints button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var box = document.getElementById('question');
+      box.value = b.dataset.q;
+      box.focus();
+    });
+  });
+</script>
+{% endblock %}

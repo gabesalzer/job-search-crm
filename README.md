@@ -65,17 +65,18 @@ one. To enable it, put `FIRECRAWL_API_KEY=fc-...` in `.env` and restart.
 
 ### Optional: the model-backed features
 
-Two features call the Anthropic API. Put `ANTHROPIC_API_KEY=sk-ant-...` in
+Three features call the Anthropic API. Put `ANTHROPIC_API_KEY=sk-ant-...` in
 `.env` and restart to enable them; set `BRIEF_MODEL` too if you want to pin a
-model other than the default. With no key, neither renders and the rest of the
-app is entirely unaffected — clone this repo without a key and you get a
+model other than the default. With no key, none of them render and the rest of
+the app is entirely unaffected — clone this repo without a key and you get a
 working CRM that never contacts anyone.
 
-These are the only parts of the project that send your data anywhere, and they
-differ in when they fire, which is worth knowing before you turn them on:
+These are the only parts of the project that send your data anywhere. They
+differ in *when* they fire and in *how much* they send, which is the thing
+worth knowing before you turn them on:
 
 - **The Brief** never fires on its own. The button is the only thing that
-  triggers it.
+  triggers it, and it sends one application.
 - **The automatic thread read** fires when you *save* an email thread, without
   a separate press. Saving a thread sends that thread — and the company, role,
   stage and your context note for the application it's attached to — and gets
@@ -83,6 +84,13 @@ differ in when they fire, which is worth knowing before you turn them on:
   already rated the thread yourself, nothing on a thread with no body, and
   nothing on a save that didn't change the messages. Everything already in
   your database stays untouched until you press *Read it now* on it.
+- **Ask** sends the whole pipeline — every application, every meeting
+  transcript, every email body — on every question. This is far the widest of
+  the three and it is deliberate: a question like "what concerns came up about
+  my fit" has no useful answer from one record. Nothing fires until you press
+  *Ask*, so it is a button like the Brief, but the button is much bigger. The
+  page says so under the composer with the current count, rather than only
+  here.
 
 If you'd rather nothing left the box automatically, leave the key unset and
 score threads by hand; every other feature works identically.
@@ -196,6 +204,24 @@ score threads by hand; every other feature works identically.
   and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
   no key the panel simply doesn't appear and nothing else about the app
   changes.
+- **Ask**: a chat page that answers questions about the pipeline from what's
+  recorded in it — what someone actually said in an interview, which pursuits
+  have gone quiet and for how long, what you committed to and haven't done, a
+  draft follow-up in your own voice. It is the one feature that reads *across*
+  applications, which is what the board and the Brief can't do: both show you
+  one record at a time, and a question like "who has mentioned budget
+  pressure" doesn't live in any single one. The whole record is assembled into
+  one packet on every question, so answers cite dates and companies rather
+  than summarising vaguely, and the prompt tells it to say "that isn't
+  recorded" rather than fill a gap — a confident wrong answer about your own
+  pipeline is worse than no answer. Because a full pipeline can run past the
+  packet's ceiling, verbatim text is spent newest-first: structured facts
+  about every application always go in, and if something has to be dropped it
+  is the oldest transcript, marked as dropped rather than silently missing.
+  The conversation is stored so it survives a page load, and *Clear
+  conversation* really deletes it — worth having, since the transcript
+  accumulates quoted fragments of other people's emails. Requires
+  `ANTHROPIC_API_KEY`.
 - **A second opinion**: `skills/application-viability/` is a Claude Skill —
   instructions, not code — that reads a transcript, an email thread, or an
   application's context and returns its own 0–100 score with a one-line

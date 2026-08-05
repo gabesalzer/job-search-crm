@@ -526,6 +526,64 @@ cases = [
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
     }),
+    # --- Chat --------------------------------------------------------------
+    # A conversation in progress. The assistant turn is deliberately
+    # multi-paragraph, because the template splits on a blank line to make
+    # paragraphs and a single-paragraph fixture would never exercise that.
+    ("chat.html", {
+        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
+        "error": "", "application_count": 7,
+        "messages": [
+            SimpleNamespace(id=1, role="user", content="Which pursuits have gone quiet?",
+                            model=None, usage=None,
+                            created_at=datetime(2026, 8, 5, 9, 0)),
+            SimpleNamespace(
+                id=2, role="assistant",
+                content=("Two. Condor has been quiet 19 days since the panel on 17 July.\n\n"
+                         "Plaid has been quiet 31 days since the recruiter screen."),
+                model="claude-sonnet-5", usage='{"cache_read_input_tokens": 88000}',
+                created_at=datetime(2026, 8, 5, 9, 0, 12)),
+        ],
+    }),
+    # Nothing asked yet: the starter chips render and the clear button must
+    # not. This is the state the page opens in and the one most seen.
+    ("chat.html (empty)", {
+        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
+        "error": "", "application_count": 0, "messages": [],
+    }),
+    # No key -- what anyone cloning the public repo sees. Composer disabled,
+    # and nothing may reach for a model name off a message that isn't there.
+    ("chat.html (disabled)", {
+        "active": "chat", "chat_enabled": False, "model_name": "claude-sonnet-5",
+        "error": "", "application_count": 3, "messages": [],
+    }),
+    # A failed call. The question was stored before the API was called, so the
+    # transcript ends on a user turn with no answer under it -- a shape the
+    # happy path never produces and the alternating-role loop has to survive.
+    ("chat.html (error, unanswered question)", {
+        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
+        "error": "The request timed out after 180s. A very long transcript can do this; try again.",
+        "application_count": 7,
+        "messages": [
+            SimpleNamespace(id=1, role="user", content="Draft a follow-up to Todd.",
+                            model=None, usage=None,
+                            created_at=datetime(2026, 8, 5, 9, 0)),
+        ],
+    }),
+    # An assistant turn stored before `model` existed, or written by a path
+    # that never set it. ADD COLUMN backfills NULL, so this is what every row
+    # predating the column looks like; the provenance line has to disappear
+    # rather than print "None".
+    ("chat.html (answer with no model recorded)", {
+        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
+        "error": "", "application_count": 1,
+        "messages": [
+            SimpleNamespace(id=1, role="user", content="Anything from Condor?",
+                            model=None, usage=None, created_at=None),
+            SimpleNamespace(id=2, role="assistant", content="Nothing since 17 July.",
+                            model=None, usage=None, created_at=None),
+        ],
+    }),
 ]
 
 failures = 0
