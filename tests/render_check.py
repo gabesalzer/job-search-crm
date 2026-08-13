@@ -42,7 +42,7 @@ resume = SimpleNamespace(
 
 app_obj = SimpleNamespace(
     id=4, title="Sr. Operations Manager", company_id=1, company=company, stage=enum("Applied"),
-    lost_reason=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
+    lost_reason=None, lost_category=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
     created_at=datetime(2026, 6, 28, 9, 0), updated_at=datetime(2026, 7, 12, 16, 30),
     last_activity_date=datetime(2026, 7, 10, 15, 0),
@@ -202,13 +202,68 @@ brief_off = {
     "enabled": False, "text": None, "generated_at": None, "model": None, "changed_since": 0,
 }
 
+from app import analytics as analytics_model  # noqa: E402
+
+ANALYTICS_STAGES = ["Qualification", "Discovery", "Takehome",
+                    "Executive Signoff", "Negotiation", "Closed Won"]
+
+
+def _ah(to_stage, when):
+    return {"from_stage": None, "to_stage": to_stage, "changed_at": when}
+
+
+# Enough dated history that at least one interval clears the sample floor and
+# at least one does not -- both branches of the tile render in a single case.
+analytics_populated = analytics_model.overview([
+    {"id": 1, "company": "Condor", "title": "RevOps Lead", "stage": "Discovery",
+     "source": "Referral", "applied_date": datetime(2026, 5, 13),
+     "lost_category": None, "stage_history": [
+         _ah("Staging", datetime(2026, 5, 1)),
+         _ah("Qualification", datetime(2026, 5, 11)),
+         _ah("Discovery", datetime(2026, 5, 23))]},
+    {"id": 2, "company": "Plaid", "title": "Ops Manager", "stage": "Closed Lost",
+     "source": "Outbound", "applied_date": datetime(2026, 5, 3),
+     "lost_category": "Compensation gap", "stage_history": [
+         _ah("Staging", datetime(2026, 5, 1)),
+         _ah("Qualification", datetime(2026, 5, 9)),
+         _ah("Discovery", datetime(2026, 5, 17)),
+         _ah("Closed Lost", datetime(2026, 6, 10))]},
+    {"id": 3, "company": "Jellyfish", "title": "GTM Lead", "stage": "Negotiation",
+     "source": "Referral", "applied_date": datetime(2026, 5, 1),
+     "lost_category": None, "stage_history": [
+         _ah("Staging", datetime(2026, 4, 25)),
+         _ah("Qualification", datetime(2026, 5, 1)),
+         _ah("Discovery", datetime(2026, 5, 10)),
+         _ah("Negotiation", datetime(2026, 5, 31))]},
+    # Closed lost with no category: the row the breakdown must show rather than
+    # drop, or the categorised losses read as the whole story.
+    {"id": 4, "company": "LanceDB", "title": "RevOps", "stage": "Closed Lost",
+     "source": None, "applied_date": None, "lost_category": None,
+     "stage_history": [_ah("Qualification", datetime(2026, 5, 5))]},
+], ANALYTICS_STAGES)
+
+analytics_empty = analytics_model.overview([], ANALYTICS_STAGES)
+
+analytics_thin = analytics_model.overview([
+    {"id": 1, "company": "Condor", "title": "RevOps Lead", "stage": "Discovery",
+     "source": "Referral", "applied_date": datetime(2026, 5, 13),
+     "lost_category": None, "stage_history": [
+         _ah("Qualification", datetime(2026, 5, 11)),
+         _ah("Discovery", datetime(2026, 5, 23))]},
+    # In Staging, so on no funnel rung at all -- drives the "not on the funnel"
+    # sentence that stops a short first bar reading as a bug.
+    {"id": 2, "company": "Sierra", "title": "Ops", "stage": "Staging",
+     "source": None, "applied_date": None, "lost_category": None,
+     "stage_history": []},
+], ANALYTICS_STAGES)
+
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
     ("posting_edit.html", {"active": "postings", "posting": posting}),
     ("resume_edit.html", {"active": "resumes", "resume": resume}),
     ("application_edit.html", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "activity_age": 3,
@@ -225,7 +280,7 @@ cases = [
         "active": "board",
         "app_obj": SimpleNamespace(**{**app_obj.__dict__, "source": None, "context": None}),
         "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting],
         "activity": [{**row, "score": None} for row in activity],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
@@ -251,7 +306,7 @@ cases = [
             "manual_forecast": None,
         }),
         "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "activity_age": 0,
@@ -267,7 +322,7 @@ cases = [
     # branch that renders the staleness warning.
     ("application_edit.html (gone quiet)", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "activity_age": 41,
@@ -280,7 +335,7 @@ cases = [
     # looks confident and the evidence pill has to say otherwise.
     ("application_edit.html (thin evidence)", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "activity_age": None,
@@ -293,7 +348,7 @@ cases = [
     # to say that rather than repeating the empty state's "nothing is linked".
     ("application_edit.html (activity, none of it rated)", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "activity_age": 3,
@@ -314,7 +369,7 @@ cases = [
     # feature that made this state possible.
     ("application_edit.html (threads read, no signal found)", {
         "active": "board", "app_obj": app_obj, "stages": ["Saved", "Applied", "Closed Lost"],
-        "lost_reasons": ["Ghosted", "Other"], "companies": [company], "resumes": [resume],
+        "lost_categories": ["Compensation gap", "Ghosted, never told me", "Other"], "companies": [company], "resumes": [resume],
         "postings": [posting], "activity": activity,
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
         "activity_age": 3,
@@ -526,6 +581,24 @@ cases = [
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
     }),
+    # --- Analytics ---------------------------------------------------------
+    # The fixtures come from the real module rather than hand-written literals,
+    # for the same reason the forecast ones do: a transcribed payload can drift
+    # from what the app actually emits and go on passing while it does.
+    ("analytics.html", {"active": "analytics", "stage_order": ANALYTICS_STAGES,
+                        **analytics_populated}),
+    # Nothing recorded at all -- the state a fresh clone opens in, and the one
+    # where every number would be a division by zero if it were computed.
+    ("analytics.html (empty)", {"active": "analytics",
+                                "stage_order": ANALYTICS_STAGES,
+                                **analytics_empty}),
+    # Records exist but almost none can be timed. This is the state Gabe's own
+    # pipeline is actually in, so it is the one that has to read well: every
+    # tile says why it has no number instead of showing a blank or a 1-record
+    # average, and the funnel still draws.
+    ("analytics.html (below the sample floor)", {"active": "analytics",
+                                                 "stage_order": ANALYTICS_STAGES,
+                                                 **analytics_thin}),
     # --- Chat --------------------------------------------------------------
     # A conversation in progress. The assistant turn is deliberately
     # multi-paragraph, because the template splits on a blank line to make

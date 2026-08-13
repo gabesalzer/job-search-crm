@@ -18,6 +18,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, selectinload
 
+from .. import analytics as analytics_model
 from .. import brief as brief_model
 from .. import chat as chat_model
 from .. import forecast as forecast_model
@@ -36,8 +37,11 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 router = APIRouter(tags=["ui"], include_in_schema=False)
 
 STAGE_VALUES = [s.value for s in models.Stage]          # ordered; Closed Lost last
+# The funnel rungs only -- Staging and Closed Lost are deliberately absent
+# (see the note above models.STAGE_ORDER).
+STAGE_ORDER_VALUES = [s.value for s in models.STAGE_ORDER]
 COMPANY_TYPES = [t.value for t in models.CompanyType]
-LOST_REASON_VALUES = [r.value for r in models.LostReason]
+LOST_CATEGORY_VALUES = [c.value for c in models.LostCategory]
 PERSON_ROLE_VALUES = [r.value for r in models.PersonRole]
 APPLICATION_SOURCE_VALUES = [s.value for s in models.ApplicationSource]
 FORECAST_VALUES = [f.value for f in models.ForecastCategory]
@@ -651,7 +655,7 @@ def edit_application_page(
         "active": "board",
         "app_obj": app_obj,
         "stages": STAGE_VALUES,
-        "lost_reasons": LOST_REASON_VALUES,
+        "lost_categories": LOST_CATEGORY_VALUES,
         "sources": APPLICATION_SOURCE_VALUES,
         "companies": db.query(models.Company).order_by(models.Company.name).all(),
         "resumes": db.query(models.Resume).order_by(models.Resume.label).all(),
@@ -809,6 +813,7 @@ def update_application_ui(
     resume_id: Optional[str] = Form(None),
     job_posting_id: Optional[str] = Form(None),
     lost_reason: str = Form(""),
+    lost_category: str = Form(""),
     applied_date: str = Form(""),
     created_at: str = Form(""),
     last_activity_date: str = Form(""),
@@ -855,9 +860,16 @@ def update_application_ui(
     if new_stage != app_obj.stage:
         app_obj.stage = new_stage  # triggers the StageHistory event listener
         app_obj.last_activity_date = datetime.now(timezone.utc)
-    app_obj.lost_reason = (
-        models.LostReason(lost_reason) if new_stage == models.Stage.CLOSED_LOST and lost_reason else None
-    )
+    # Both Closed Lost fields are cleared when the record is not Closed Lost,
+    # so a pursuit dragged back out of the column cannot carry a stale cause
+    # into the loss breakdown, which filters on current stage.
+    if new_stage == models.Stage.CLOSED_LOST:
+        app_obj.lost_reason = lost_reason.strip() or None
+        app_obj.lost_category = (
+            models.LostCategory(lost_category) if lost_category else None)
+    else:
+        app_obj.lost_reason = None
+        app_obj.lost_category = None
 
     # --- Hand-correctable timestamps -------------------------------------- #
     # Every date on the record is editable, because the date a thing was
@@ -1871,7 +1883,8 @@ def _chat_corpus(db: Session) -> str:
             "applied_date": _naive_utc(a.applied_date),
             "champion": a.champion,
             "manual_forecast": a.manual_forecast.value if a.manual_forecast else None,
-            "lost_reason": a.lost_reason.value if a.lost_reason else None,
+            "lost_reason": a.lost_reason,
+            "lost_category": a.lost_category.value if a.lost_category else None,
             "context": a.context,
             "notes": a.notes,
             "resume_label": a.resume.label if a.resume else None,
@@ -2015,3 +2028,57 @@ def chat_clear(db: Session = Depends(get_db)):
     db.query(models.ChatMessage).delete()
     db.commit()
     return RedirectResponse(url="/chat", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Analytics: how long the pipeline takes, and where it leaks
+# --------------------------------------------------------------------------- #
+def _analytics_apps(db: Session) -> List[dict]:
+    """Every application flattened into the plain dicts `analytics.py` wants.
+
+    Same division of labour as the other three adapters in this file: the ORM
+    walking happens here and the arithmetic stays in a module that can be
+    tested against literals.
+    """
+    apps = (
+        db.query(models.JobApplication)
+        .options(
+            selectinload(models.JobApplication.stage_history),
+            selectinload(models.JobApplication.company),
+        )
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "company": a.company.name if a.company else None,
+            "title": a.title,
+            "stage": a.stage.value if a.stage else None,
+            "source": a.source.value if a.source else None,
+            # Flattened on the way out, like everywhere else -- analytics.py
+            # subtracts these from `_utcnow`-stamped history rows constantly.
+            "applied_date": _naive_utc(a.applied_date),
+            "created_at": _naive_utc(a.created_at),
+            "lost_category": a.lost_category.value if a.lost_category else None,
+            "lost_reason": a.lost_reason,
+            "stage_history": [
+                {
+                    "from_stage": h.from_stage.value if h.from_stage else None,
+                    "to_stage": h.to_stage.value if h.to_stage else None,
+                    "changed_at": _naive_utc(h.changed_at),
+                }
+                for h in a.stage_history
+            ],
+        }
+        for a in apps
+    ]
+
+
+@router.get("/analytics")
+def analytics_page(request: Request, db: Session = Depends(get_db)):
+    payload = analytics_model.overview(_analytics_apps(db), STAGE_ORDER_VALUES)
+    return templates.TemplateResponse(request, "analytics.html", {
+        "active": "analytics",
+        "stage_order": STAGE_ORDER_VALUES,
+        **payload,
+    })

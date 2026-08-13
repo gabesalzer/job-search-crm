@@ -10,7 +10,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from .database import Base, engine, ensure_schema, migrate_email_thread_people, migrate_stage_names
+from .database import (
+    Base,
+    engine,
+    ensure_schema,
+    migrate_email_thread_people,
+    migrate_lost_reason,
+    migrate_stage_names,
+)
 from .routers import (
     analytics,
     applications,
@@ -28,6 +35,7 @@ Base.metadata.create_all(bind=engine)
 ensure_schema()
 migrate_stage_names()  # one-time remap to the July 2026 macro stage model
 migrate_email_thread_people()  # one-time move off EmailThread's old single person_id
+migrate_lost_reason()  # one-time move off the retired LostReason enum
 
 app = FastAPI(
     title="Job Search CRM",

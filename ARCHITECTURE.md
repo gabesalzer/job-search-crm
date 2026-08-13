@@ -125,9 +125,10 @@ History only ever reflects real pipeline movement.
 - **Middle level — pipeline.** Track which applications are at which stage. Because
   Stage History is append-only, this becomes a measurable funnel rather than a
   snapshot, which lets you compute stage-to-stage conversion (e.g. "Discovery →
-  Takehome"). Pair `stage` with a `lost_reason` picklist (ghosted, rejected
-  after screen, rejected after onsite, declined by me, …) — that's the field that
-  answers *where and why* you fall off.
+  Takehome"). Pair `stage` with a `lost_category` picklist — that's the field
+  that answers *why* you fall off. (An earlier `lost_reason` enum answered
+  *when* instead, which Stage History already records exactly; see the Closed
+  Lost section below for why it was replaced rather than extended.)
 - **Per-interaction — calibration.** Every Meeting and Email Thread can carry a
   0–100 win-likelihood score with a reason and a timestamp. Because each one is
   attached to an application that eventually reaches a terminal stage, these
@@ -1311,6 +1312,119 @@ decision in the project — so it is a plain function over plain dicts that
 `_chat_corpus()` in `ui.py`, and is covered separately by
 `tests/test_chat_routes.py` against the running app, because an adapter is
 precisely the kind of code that reads correct and isn't.
+
+## Analytics: durations, the funnel, and the sample-size floor
+
+`app/analytics.py` is stdlib-only, like `forecast.py`, `brief.py` and
+`chat.py`. Both `/analytics` (the page) and `/api/analytics/*` (the JSON) read
+it, which is the point: the funnel maths used to live inline in the API router,
+and giving the page its own copy would have meant two implementations of "how
+many applications reached Discovery" that could drift apart and disagree on
+screen — in a tool whose entire purpose is telling you the truth about your own
+pipeline.
+
+### Two rules that pull in opposite directions, and both are needed
+
+**Reach credits the whole prefix.** History rows are not guaranteed for every
+stage an application passed through: one created straight at Discovery has a
+single opening row and no Qualification row, and the stage model explicitly
+allows skipping. Crediting only `to_stage` let a later stage report more
+applications than an earlier one — conversion above 100%, which is not a
+funnel. That bug is pinned by fixtures kept verbatim from when it was fixed.
+
+**Timing counts only real dated transitions.** A stage credited by implication
+never happened on a date, so it contributes to `reached` and not to any
+average. That is why `n` differs from the application count almost everywhere,
+and why `n` is displayed rather than assumed.
+
+### Qualification is not a milestone
+
+`DEFAULT_STAGE` is Qualification, so every application is *born* there and
+"days from application to Qualification" is zero by construction. The interval
+worth measuring at the front of the funnel is `Staging → Qualification`: the
+work of getting an angle in before you apply. It is absent — not zero — for a
+role you qualified immediately, which is a different claim and must not be
+averaged as if it were a fast one.
+
+The three shipped intervals are `Staging → Qualification`,
+`Applied → Discovery` (measured off the `applied_date` column, because applying
+is a fact about the world with a date while Qualification is a column default),
+and `Applied → closed`, which ends at either terminal stage.
+
+### The sample-size floor is in the data, not the template
+
+`stats()` returns `enough=False` and *null* mean and median below `MIN_SAMPLE`
+(3). The suppression lives there rather than in a template `{% if %}` so a
+consumer that ignores the flag still cannot render a two-record average — there
+is no number there to render.
+
+Three is not a statistical threshold and is not defended as one; no honest
+threshold exists at this scale. It is the smallest n at which a single outlier
+cannot *be* the answer. The sample size is shown next to every number that
+clears the floor, because the floor is a floor and not a warranty. Mean and
+median are both returned: the median is the one to trust here, and the two
+disagreeing is itself the signal that one long pursuit is carrying the average.
+
+Two smaller honesty rules sit alongside it. A negative interval — an
+`applied_date` typed in later than the stage move it supposedly preceded —
+returns None rather than a negative number, because averaging a negative
+duration into "how long does this take" silently drags the answer down.
+And `off_funnel` names the gap between the application count and the funnel's
+widest rung, because an application in Staging is correctly on no rung and the
+resulting short first bar otherwise reads as a bug.
+
+### The drill-down is a table, and that is not a compromise
+
+Every application gets a row, including ones that contribute to no interval,
+because a row of blanks is the visible answer to "why is n only 3". At a
+handful of records the rows are frankly more informative than the summary above
+them — an average of four hides both the spread and which pursuit produced
+which number.
+
+## Closed Lost: one picklist to count by, one free field to remember by
+
+`lost_category` is an enum of nine causes; `lost_reason` is plain text for the
+specifics. Both are nullable even on a Closed Lost record, because a loss you
+have not diagnosed yet is a real state — often you genuinely do not know for
+weeks — and forcing a value at the moment of closing fills the column with
+whichever option is least wrong, which is exactly the data that makes a
+breakdown lie later. The page counts uncategorised losses openly instead.
+
+### Why the old enum was replaced rather than extended
+
+`LostReason` offered Ghosted, Rejected after application / screen / onsite,
+Declined by me, Role closed / paused, and Other. Four of those seven answer
+*when* a pursuit ended rather than *why* — and "when" is already recorded
+exactly, with dates, in Stage History. So the field spent most of its options
+restating data the database already held, and left unanswered the only question
+a loss breakdown is read for.
+
+Two choices in the replacement are worth keeping. **Ghosted survives**, even
+though it is the absence of a reason rather than one: it is a common real
+outcome, and recording that you never found out is honest where inferring a
+cause would not be. **The two withdrawals are separate** — the old enum
+collapsed both into "Declined by me", but "I did not want this" and "I had
+something better" point in opposite directions when read back months later.
+
+### The migration preserves rather than guesses
+
+`lost_reason` changed from an Enum column to text in the same commit, which on
+SQLite needs no DDL — the column is dynamically typed. `migrate_lost_reason()`
+then translates a stored value into a category **only where the old option
+already named a cause** (Ghosted, Role closed, Other). The four that named a
+moment or were ambiguous are moved into the free-text field and their category
+left NULL for a human.
+
+Guessing a category from "Rejected after screen" would have produced a
+tidier-looking breakdown built partly on fabrication. A breakdown with visible
+holes is better than one with invisible invention in it: the holes ask to be
+filled, the invention does not.
+
+It never overwrites a category a human already chose, is idempotent, and never
+rewrites text a human typed. `tests/test_analytics_routes.py` pins all three
+against a real database — this runs on every boot, unlike
+`_migrate_email_thread_person_id`, which is the cautionary tale immediately
+below.
 
 ## Context vs. notes on an Application
 

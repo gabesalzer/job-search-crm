@@ -204,6 +204,19 @@ score threads by hand; every other feature works identically.
   and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
   no key the panel simply doesn't appear and nothing else about the app
   changes.
+- **Analytics**: how long the pipeline takes and where it leaks. Three
+  durations — how long you work an angle in before committing (Staging →
+  Qualification), how long from submitting until someone actually engages
+  (Applied → Discovery), and full cycle time — plus a drop-off funnel, a
+  breakdown of why the lost ones were lost, and a table of every application
+  with its own timings. Two things make it trustworthy rather than merely
+  impressive. Every figure carries the number of records behind it, and an
+  average built on fewer than three says "not enough data" instead of showing
+  a number that is really just one pursuit; the suppression lives in the data,
+  so the JSON API can't render one either. And the funnel counts an
+  application toward every stage it must have passed through, not just the
+  ones with a history row — without that, a later stage can report more
+  applications than an earlier one, which is not a funnel. Needs no API key.
 - **Ask**: a chat page that answers questions about the pipeline from what's
   recorded in it — what someone actually said in an interview, which pursuits
   have gone quiet and for how long, what you committed to and haven't done, a

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from .models import (
     ApplicationSource,
     CompanyType,
-    LostReason,
+    LostCategory,
     PersonRole,
     Rating,
     Stage,
@@ -116,14 +116,21 @@ class JobApplicationCreate(JobApplicationBase):
 
 class JobApplicationRead(ORMModel, JobApplicationBase):
     id: int
-    lost_reason: Optional[LostReason] = None
+    # Free text now, not an enum -- see models.JobApplication. The picklist
+    # moved to `lost_category`.
+    lost_reason: Optional[str] = None
+    lost_category: Optional[LostCategory] = None
     last_activity_date: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
 
 class ChangeStage(BaseModel):
     stage: Stage
-    lost_reason: Optional[LostReason] = None
+    # Both optional even when closing lost: a loss you haven't diagnosed yet is
+    # a real state, and requiring a category here would fill the column with
+    # whichever option is least wrong. See models.LostCategory.
+    lost_reason: Optional[str] = None
+    lost_category: Optional[LostCategory] = None
 
 
 class StageHistoryRead(ORMModel):

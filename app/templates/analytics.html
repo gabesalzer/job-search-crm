@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Analytics · Job Search CRM{% endblock %}
+{% block body %}
+<style>
+  /* One hue for everything on this page, deliberately. Every bar here is the
+     same measure -- a count of applications -- so there is only one series,
+     and a second colour would be decoration pretending to be information. It
+     also sidesteps the real trap: nine lost-reason categories would need nine
+     hues distinguishable under colour-blindness, which is not achievable past
+     about eight and would fail for a reader who needs it most. The category
+     labels sit beside their bars and carry identity on their own. */
+  .anlcol{max-width:var(--w-edit);margin:0 auto}
+  .anl-sec{margin-bottom:var(--s-7)}
+  .anl-sec h2{font-size:var(--fs-lg);font-weight:620;margin:0 0 var(--s-1);
+    letter-spacing:-0.01em}
+  .anl-sec .note{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s-4);
+    max-width:var(--w-prose)}
+
+  /* --- Stat tiles --------------------------------------------------------- */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    gap:var(--s-3)}
+  .tile{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius-lg);padding:var(--s-4);box-shadow:var(--shadow-sm)}
+  .tile .label{font-size:var(--fs-xs);color:var(--muted);font-weight:500;
+    margin-bottom:var(--s-2)}
+  /* Proportional figures, not tabular: these are large standalone numbers and
+     equal-width digits make a value like 121 read loose at this size. The
+     table below is the opposite case and does use tabular. */
+  .tile .value{font-size:2rem;font-weight:660;line-height:1.05;
+    letter-spacing:-0.02em;color:var(--ink)}
+  .tile .value .unit{font-size:var(--fs-sm);font-weight:500;color:var(--muted);
+    margin-left:var(--s-2);letter-spacing:0}
+  .tile .value.thin{font-size:var(--fs-lg);font-weight:600;color:var(--muted);
+    letter-spacing:-0.01em}
+  .tile .sub{font-size:var(--fs-2xs);color:var(--neutral);margin-top:var(--s-2);
+    line-height:1.5}
+  .tile .blurb{font-size:var(--fs-2xs);color:var(--neutral);margin-top:var(--s-1);
+    line-height:1.5}
+
+  /* --- Funnel / drop-off -------------------------------------------------- */
+  /* A meter rather than a bare bar: the track shows the whole cohort and the
+     fill shows how much of it got this far, so drop-off is visible as unfilled
+     space on every row instead of only as a number you have to subtract. */
+  .funnel{display:grid;grid-template-columns:auto minmax(0,560px) auto auto;
+    gap:var(--s-2) var(--s-3);align-items:center;justify-content:start}
+  .funnel .stage{font-size:var(--fs-sm);color:var(--ink);white-space:nowrap;
+    font-weight:500}
+  .funnel .track{background:var(--accent-soft);border-radius:0 4px 4px 0;
+    height:16px;position:relative}
+  /* Square at the baseline, 4px rounded at the data end. */
+  .funnel .fill{background:var(--accent);height:16px;border-radius:0 4px 4px 0}
+  .funnel .count{font-size:var(--fs-sm);color:var(--ink);font-weight:600;
+    font-variant-numeric:tabular-nums;text-align:right;min-width:2ch}
+  .funnel .drop{font-size:var(--fs-2xs);color:var(--neutral);white-space:nowrap;
+    font-variant-numeric:tabular-nums;min-width:10ch}
+
+  /* --- Loss breakdown ----------------------------------------------------- */
+  .losses{display:grid;grid-template-columns:auto minmax(0,420px) auto;
+    gap:var(--s-2) var(--s-3);align-items:center;justify-content:start}
+  .losses .cat{font-size:var(--fs-sm);color:var(--ink);white-space:nowrap}
+  .losses .cat.none{color:var(--muted);font-style:italic}
+  .losses .bar{background:var(--accent);height:14px;border-radius:0 4px 4px 0}
+  .losses .n{font-size:var(--fs-sm);font-weight:600;
+    font-variant-numeric:tabular-nums;text-align:right;min-width:2ch}
+
+  /* --- Timing table ------------------------------------------------------- */
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);
+    border-radius:var(--radius-lg);background:var(--panel)}
+  table.timing{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}
+  table.timing th{text-align:left;font-size:var(--fs-2xs);color:var(--muted);
+    font-weight:600;text-transform:uppercase;letter-spacing:0.03em;
+    padding:var(--s-3);border-bottom:1px solid var(--line);white-space:nowrap}
+  table.timing th.num,table.timing td.num{text-align:right;
+    font-variant-numeric:tabular-nums}
+  table.timing td{padding:var(--s-3);border-bottom:1px solid var(--line);
+    vertical-align:top}
+  table.timing tr:last-child td{border-bottom:none}
+  table.timing tr:hover td{background:var(--bg)}
+  table.timing td.co{font-weight:550}
+  table.timing td .role{color:var(--muted);font-size:var(--fs-xs);
+    display:block;margin-top:1px}
+  table.timing td.blank,table.timing .blank{color:var(--neutral)}
+</style>
+
+<div class="anlcol">
+  <h1>Analytics</h1>
+  <p class="subtitle">
+    How long the pipeline takes and where it leaks, measured off real dated
+    stage transitions rather than current position. Every figure carries the
+    number of records behind it, because at this scale that is usually the more
+    important half.
+  </p>
+
+  {% if total == 0 %}
+    <div class="empty" style="padding:var(--s-7) 0">
+      Nothing to measure yet — no applications on the record.
+    </div>
+  {% else %}
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="anl-sec">
+    <h2>How long each step takes</h2>
+    <p class="note">
+      Averages need at least {{ min_sample }} timed records before they mean
+      anything; below that these say so rather than showing a number built on
+      one or two.
+    </p>
+    <div class="tiles">
+      {% for iv in intervals %}
+      <div class="tile">
+        <div class="label">{{ iv.label }}</div>
+        {% if iv.enough %}
+          <div class="value">{{ iv.mean }}<span class="unit">days avg</span></div>
+          <div class="sub">
+            Median {{ iv.median }} · range {{ iv.min }}–{{ iv.max }} ·
+            {{ iv.n }} of {{ iv.eligible }} record{{ '' if iv.eligible == 1 else 's' }}
+          </div>
+        {% else %}
+          <div class="value thin">Not enough data</div>
+          <div class="sub">
+            {% if iv.n == 0 %}
+              No record has both dates this needs yet.
+            {% else %}
+              Only {{ iv.n }} record{{ '' if iv.n == 1 else 's' }} can answer this
+              — {{ min_sample }} needed before an average is worth showing.
+              {% if iv.min is not none %}The one{{ '' if iv.n == 1 else 's' }} on
+              file ran {{ iv.min }}–{{ iv.max }} days.{% endif %}
+            {% endif %}
+          </div>
+        {% endif %}
+        <div class="blurb">{{ iv.blurb }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="anl-sec">
+    <h2>Drop-off</h2>
+    <p class="note">
+      How many applications ever reached each stage. Reaching a stage credits
+      every stage before it, so a pursuit that skipped Takehome still counts
+      toward it — otherwise a later stage could show more applications than an
+      earlier one, which is not a funnel. Staging and Closed Lost are not rungs
+      and are left out.{% if off_funnel %} {{ off_funnel }} of your
+      {{ total }} application{{ '' if total == 1 else 's' }}
+      {{ 'is' if off_funnel == 1 else 'are' }} not on the funnel at all —
+      either still in Staging, or closed with no stage history behind
+      {{ 'it' if off_funnel == 1 else 'them' }}.{% endif %}
+    </p>
+    <div class="funnel">
+      {% for row in funnel %}
+        <div class="stage">{{ row.stage }}</div>
+        <div class="track">
+          {# A count of zero draws nothing. `min-width` on the fill put a 2px
+             sliver here, which reads as "almost none" rather than "none" --
+             the one distinction the bottom of a funnel exists to make. #}
+          {% if row.reached %}
+            <div class="fill" style="width:{{ (row.share_of_first * 100)|round(1) }}%"></div>
+          {% endif %}
+        </div>
+        <div class="count">{{ row.reached }}</div>
+        <div class="drop">
+          {% if row.dropped is none %}
+            —
+          {% elif row.dropped == 0 %}
+            no drop
+          {% else %}
+            −{{ row.dropped }} ({{ ((1 - row.conversion_from_prev) * 100)|round|int }}%)
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  {% if losses.total_lost %}
+  <div class="anl-sec">
+    <h2>Why they were lost</h2>
+    <p class="note">
+      {{ losses.total_lost }} closed lost. Uncategorised ones are counted and
+      shown rather than dropped — leaving them out would make the categorised
+      ones look like the whole story.
+    </p>
+    <div class="losses">
+      {% for row in losses.rows %}
+        <div class="cat {% if row.category == 'Not recorded' %}none{% endif %}">{{ row.category }}</div>
+        <div>
+          <div class="bar" style="width:{{ (row.count / losses.total_lost * 100)|round(1) }}%"></div>
+        </div>
+        <div class="n">{{ row.count }}</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="anl-sec">
+    <h2>Every application, timed</h2>
+    <p class="note">
+      The rows behind the averages above. At this sample size these are often
+      more informative than the summary — an average of four hides both the
+      spread and which pursuit produced which number. Blank means the record
+      lacks one of the two dates that interval needs.
+    </p>
+    <div class="tablewrap">
+      <table class="timing">
+        <thead>
+          <tr>
+            <th>Application</th>
+            <th>Stage</th>
+            <th>Source</th>
+            <th>Applied</th>
+            <th class="num">Staging → Qual</th>
+            <th class="num">Applied → Disc</th>
+            <th class="num">Applied → Closed</th>
+            <th>Lost because</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in timings %}
+          <tr>
+            <td class="co">
+              <a href="/applications/{{ row.id }}/edit">{{ row.company or '—' }}</a>
+              <span class="role">{{ row.title or '—' }}</span>
+            </td>
+            <td>{{ row.stage }}</td>
+            <td>{{ row.source or '—' }}</td>
+            <td class="num">{{ row.applied_date.strftime('%Y-%m-%d') if row.applied_date else '—' }}</td>
+            {% for key in ['staging_to_qualification', 'applied_to_discovery', 'applied_to_close'] %}
+              {% if row[key] is none %}
+                <td class="num blank">—</td>
+              {% else %}
+                <td class="num">{{ row[key] }}</td>
+              {% endif %}
+            {% endfor %}
+            <td>
+              {% if row.lost_category %}{{ row.lost_category }}{% elif row.stage == 'Closed Lost' %}<span class="blank">not recorded</span>{% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% endif %}
+</div>
+{% endblock %}

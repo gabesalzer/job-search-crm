@@ -101,65 +101,86 @@ check("blank created_at is a no-op", created, base["created_at"])
 
 
 # --------------------------------------------------------------------------- #
-# Mirror of analytics.applied_conversion
+# Reach and applied-conversion, against the REAL module
 # --------------------------------------------------------------------------- #
+# This section used to hand-mirror `analytics.applied_conversion` and
+# `_reached_sets`, because FastAPI and SQLAlchemy were believed to be
+# uninstallable here and the router could not be imported. That belief was
+# wrong, and the arithmetic has since moved into `app/analytics.py`, which is
+# stdlib-only and imports cleanly -- so the mirror was left proving the
+# behaviour of code that no longer exists, and passing while it did. That is
+# the exact failure mode the file's own header warned about.
+#
+# The `same_to_the_minute` and `apply_timestamps` mirrors above are still
+# mirrors: they copy logic that lives inside `ui.update_application_ui`, which
+# is a route handler rather than a pure function. Extracting it is worth doing
+# and is not done here.
+import pathlib as _pathlib  # noqa: E402
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent.parent))
+from app import analytics as analytics_model  # noqa: E402
+
 STAGE_ORDER = [
     "Qualification", "Discovery", "Takehome",
     "Executive Signoff", "Negotiation", "Closed Won",
 ]
 
 
-def reached_sets(apps, history):
-    """Mirror of analytics._reached_sets."""
-    reached = {s: set() for s in STAGE_ORDER}
+def _as_apps(apps, history):
+    """Fold the old (apps, history) fixture shape into today's nested one.
 
-    def credit(app_id, stage):
-        if stage in STAGE_ORDER:
-            for s in STAGE_ORDER[: STAGE_ORDER.index(stage) + 1]:
-                reached[s].add(app_id)
-
+    The fixtures below are kept verbatim from when this file mirrored the
+    router, because they encode real regressions -- conversion above 1.0, an
+    inbound role inflating the cohort. Only the implementation they run
+    against has changed.
+    """
+    by_id = {a["id"]: dict(a, stage_history=[]) for a in apps}
     for row in history:
-        credit(row["application_id"], row["to_stage"])
-    for a in apps:
-        credit(a["id"], a["stage"])
-    return reached
+        target = by_id.get(row["application_id"])
+        if target is not None:
+            target["stage_history"].append(
+                {"from_stage": None, "to_stage": row["to_stage"],
+                 "changed_at": row["changed_at"]})
+    return list(by_id.values())
+
+
+def reached_sets(apps, history):
+    return analytics_model.reached(_as_apps(apps, history), STAGE_ORDER)
 
 
 def applied_conversion(apps, history):
-    cohort = {a["id"]: a for a in apps if a.get("applied_date") is not None}
+    """Recreate the endpoint's shape from the module's parts.
 
-    first_reach = {}
-    for row in history:
-        if row["application_id"] not in cohort or row["changed_at"] is None:
-            continue
-        if row["to_stage"] not in STAGE_ORDER:
-            continue
-        key = (row["application_id"], row["to_stage"])
-        if key not in first_reach or row["changed_at"] < first_reach[key]:
-            first_reach[key] = row["changed_at"]
-
-    reached = reached_sets(apps, history)
-
-    applied_ids = set(cohort)
-    denom = len(applied_ids)
+    Kept as a local function so the assertions below read unchanged, but every
+    number now comes from `app/analytics.py`.
+    """
+    payload = _as_apps(apps, history)
+    cohort = [a for a in payload if a.get("applied_date") is not None]
+    cohort_ids = {a["id"] for a in cohort}
+    hits = analytics_model.reached(payload, STAGE_ORDER)
+    denom = len(cohort)
     out = []
-    for s in STAGE_ORDER:
-        if s == "Qualification":
+    for stage in STAGE_ORDER:
+        if stage == "Qualification":
             continue
-        hit = reached[s] & applied_ids
         gaps = []
-        for app_id in hit:
-            when = first_reach.get((app_id, s))
-            if when is not None:
-                gaps.append(round((when - cohort[app_id]["applied_date"]).total_seconds() / 86400, 1))
+        for app in cohort:
+            gap = analytics_model._days(
+                app["applied_date"], analytics_model.first_reach(app).get(stage))
+            if gap is not None:
+                gaps.append(gap)
+        summary = analytics_model.stats(gaps, min_sample=1)
         out.append({
-            "stage": s,
-            "reached": len(hit),
-            "conversion_from_applied": None if denom == 0 else round(len(hit) / denom, 3),
-            "median_days_from_applied": round(median(gaps), 1) if gaps else None,
-            "timed_sample": len(gaps),
+            "stage": stage,
+            "reached": len(hits[stage] & cohort_ids),
+            "conversion_from_applied": (
+                None if denom == 0 else round(len(hits[stage] & cohort_ids) / denom, 3)),
+            "median_days_from_applied": summary["median"],
+            "timed_sample": summary["n"],
         })
-    return {"applied_count": denom, "unapplied_count": len(apps) - denom, "stages": out}
+    return {"applied_count": denom, "unapplied_count": len(payload) - denom,
+            "stages": out}
 
 
 D = datetime(2026, 6, 1, 9, 0)

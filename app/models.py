@@ -171,13 +171,43 @@ CLOSED_STAGES = {Stage.CLOSED_WON, Stage.CLOSED_LOST}
 DEFAULT_STAGE = Stage.QUALIFICATION
 
 
-class LostReason(str, enum.Enum):
-    GHOSTED = "Ghosted"
-    REJECTED_AFTER_APPLICATION = "Rejected after application"
-    REJECTED_AFTER_SCREEN = "Rejected after screen"
-    REJECTED_AFTER_ONSITE = "Rejected after onsite"
-    DECLINED_BY_ME = "Declined by me"
-    ROLE_CLOSED = "Role closed / paused"
+class LostCategory(str, enum.Enum):
+    """Why a pursuit ended -- the cause, not the moment.
+
+    This replaces an earlier `LostReason` enum whose seven options were
+    Ghosted, Rejected after application / screen / onsite, Declined by me,
+    Role closed / paused, and Other. Four of those answered *when* it ended
+    rather than *why*, and "when" is already recorded exactly, with dates, in
+    StageHistory. So the old field spent most of its options restating data
+    the database already held and left the causal question unanswered -- which
+    is the only question a loss breakdown is read for.
+
+    The organising idea here is who ended it and what it was about, because
+    that is what changes the next move. "Went with another candidate" says keep
+    doing this and do more of it; "Level or scope mismatch" says the targeting
+    is wrong; "Compensation gap" says the targeting is right and the filtering
+    should happen earlier.
+
+    Two deliberate choices:
+
+    **Ghosted stays**, even though it is the absence of a reason rather than
+    one. It is a common real outcome, and recording that you never found out is
+    honest where inferring a cause would not be.
+
+    **The two withdrawals stay separate.** The old enum collapsed both into
+    "Declined by me". "I did not want this" and "I had something better" point
+    in opposite directions when these are read back months later, and merging
+    them destroys the distinction at the moment it is cheapest to record.
+    """
+
+    ANOTHER_CANDIDATE = "Went with another candidate"
+    LEVEL_SCOPE = "Level or scope mismatch"
+    COMPENSATION = "Compensation gap"
+    EXPERIENCE_GAP = "Experience or domain gap"
+    ROLE_CLOSED = "Role closed, paused, or filled internally"
+    WITHDREW_NOT_RIGHT = "I withdrew - not the right role"
+    WITHDREW_OTHER_OFFER = "I withdrew - took another offer"
+    GHOSTED = "Ghosted, never told me"
     OTHER = "Other"
 
 
@@ -347,7 +377,24 @@ class JobApplication(Base):
     )
 
     stage = Column(Enum(Stage), nullable=False, default=DEFAULT_STAGE, index=True)
-    lost_reason = Column(Enum(LostReason))  # only meaningful when Closed Lost
+
+    # --- Closed Lost: one picklist to count by, one free field to remember by.
+    #
+    # `lost_reason` used to be the `LostReason` enum column and is now plain
+    # text. That is a repurpose rather than a rename, and it is why nothing was
+    # lost in the changeover: every old enum value is still a perfectly good
+    # sentence, so a value the new picklist cannot express (a "Rejected after
+    # screen" that never said why) survives here as words instead of being
+    # dropped or guessed at. See `database._migrate_lost_reason`.
+    #
+    # Both stay nullable and neither is required, including on a Closed Lost
+    # record. A loss you have not categorised yet is a real state -- often you
+    # genuinely do not know for weeks -- and forcing a value at the moment of
+    # closing would fill this column with whichever option is least wrong,
+    # which is exactly the data that makes a breakdown lie later. The page
+    # counts uncategorised losses openly instead.
+    lost_reason = Column(Text)                  # the open field: what happened
+    lost_category = Column(Enum(LostCategory))  # the picklist: why, for counting
 
     title = Column(String(512))  # denormalized role title for convenience
     applied_date = Column(DateTime)

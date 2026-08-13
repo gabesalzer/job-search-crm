@@ -70,8 +70,13 @@ def change_stage(
     app_obj.last_activity_date = datetime.now(timezone.utc)
     if payload.stage == models.Stage.CLOSED_LOST:
         app_obj.lost_reason = payload.lost_reason
+        app_obj.lost_category = payload.lost_category
     else:
+        # Moving back out of Closed Lost clears both. A stale "Compensation
+        # gap" on a live pursuit would be counted by the loss breakdown, which
+        # filters on current stage.
         app_obj.lost_reason = None
+        app_obj.lost_category = None
     db.commit()
     db.refresh(app_obj)
     return app_obj

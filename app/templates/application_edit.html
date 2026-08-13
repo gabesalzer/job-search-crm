@@ -36,13 +36,18 @@
         </select>
       </div>
       <div class="field" id="lostReasonField" style="{% if app_obj.stage.value != 'Closed Lost' %}display:none{% endif %}">
-        <label>Lost reason</label>
-        <select name="lost_reason">
+        <label>Lost category</label>
+        <select name="lost_category">
           <option value="">—</option>
-          {% for r in lost_reasons %}
-          <option value="{{ r }}" {% if app_obj.lost_reason and app_obj.lost_reason.value==r %}selected{% endif %}>{{ r }}</option>
+          {% for c in lost_categories %}
+          <option value="{{ c }}" {% if app_obj.lost_category and app_obj.lost_category.value==c %}selected{% endif %}>{{ c }}</option>
           {% endfor %}
         </select>
+      </div>
+      <div class="field" id="lostNoteField" style="{% if app_obj.stage.value != 'Closed Lost' %}display:none{% endif %}">
+        <label>What happened</label>
+        <input type="text" name="lost_reason" value="{{ app_obj.lost_reason or '' }}"
+               placeholder="The specifics — who said what, and when">
       </div>
       <div class="field">
         <label>Resume</label>
@@ -386,11 +391,17 @@
 
 {% block scripts %}
 <script>
+  // Both Closed Lost fields appear and disappear together. They were one
+  // field before the category/free-text split, so this loop replaces a single
+  // hardcoded id -- adding a third would otherwise mean remembering this line.
   const stageSel = document.getElementById('appStage');
-  const lostField = document.getElementById('lostReasonField');
+  const lostFields = ['lostReasonField', 'lostNoteField']
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
   if (stageSel) {
     stageSel.addEventListener('change', () => {
-      lostField.style.display = stageSel.value === 'Closed Lost' ? '' : 'none';
+      const shown = stageSel.value === 'Closed Lost' ? '' : 'none';
+      lostFields.forEach((el) => { el.style.display = shown; });
     });
   }
 </script>

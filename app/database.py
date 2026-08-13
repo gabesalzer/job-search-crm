@@ -122,6 +122,92 @@ def migrate_stage_names():
         )
 
 
+# Old `LostReason` enum -> (new LostCategory NAME or None, text to keep).
+#
+# Keyed on both the member NAME and the member VALUE, because a SQLAlchemy
+# Enum column stores the name while hand-written rows and older code paths may
+# have stored the value. Whichever family this database actually used, the
+# other simply matches zero rows -- the two can never collide, since names are
+# ALL_CAPS and values are sentences.
+#
+# The mapping rule is the whole point and is deliberately conservative: a value
+# is translated into a category **only where the old option already named a
+# cause**. Three of the old seven named a moment instead ("Rejected after
+# screen" tells you when, not why) and one was ambiguous between two of the new
+# options ("Declined by me" could be either withdrawal). Those four are moved
+# into the free-text `lost_reason` field and their category is left NULL, so
+# the record still says everything it used to say and the picklist stays empty
+# until a human answers it.
+#
+# The alternative -- guessing a category from the old value -- would have
+# produced a tidier-looking breakdown built partly on fabrication, and a loss
+# breakdown that quietly contains invented causes is worse than one with holes
+# in it. The holes are visible; the fabrication would not be.
+_LOST_REASON_MIGRATION = {
+    "GHOSTED": ("GHOSTED", None),
+    "Ghosted": ("GHOSTED", None),
+    "ROLE_CLOSED": ("ROLE_CLOSED", None),
+    "Role closed / paused": ("ROLE_CLOSED", None),
+    "OTHER": ("OTHER", None),
+    "Other": ("OTHER", None),
+    # Ambiguous or non-causal: preserved as words, category left for a human.
+    "DECLINED_BY_ME": (None, "Declined by me"),
+    "Declined by me": (None, "Declined by me"),
+    "REJECTED_AFTER_APPLICATION": (None, "Rejected after application"),
+    "Rejected after application": (None, "Rejected after application"),
+    "REJECTED_AFTER_SCREEN": (None, "Rejected after screen"),
+    "Rejected after screen": (None, "Rejected after screen"),
+    "REJECTED_AFTER_ONSITE": (None, "Rejected after onsite"),
+    "Rejected after onsite": (None, "Rejected after onsite"),
+}
+
+
+def migrate_lost_reason():
+    """Move the retired `LostReason` enum into `lost_category` + `lost_reason`.
+
+    `lost_reason` changed from an Enum column to plain text in the same commit
+    that added `lost_category`. On SQLite that needs no DDL -- the column is
+    dynamically typed and the stored strings simply come back as strings -- but
+    it does need this, because an un-migrated row would otherwise display a raw
+    enum name like `REJECTED_AFTER_SCREEN` as though it were something a person
+    had typed.
+
+    Must run **before** anything reads the column through the ORM. It doesn't,
+    strictly, now that `lost_reason` is untyped text -- but it did while the
+    column was still an Enum, and the ordering in `main.py` is kept as though
+    it still matters, because the failure it prevents (a LookupError inside a
+    template render, taking the whole board down) is one this project has
+    already shipped once in a different guise.
+
+    Safe on every startup: once the old strings are gone every branch below
+    matches zero rows. Also safe on a database that never had the old enum --
+    `lost_reason` is simply NULL everywhere and nothing happens.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(job_applications)"))}
+        if not {"lost_reason", "lost_category"} <= cols:
+            return  # pre-dates one of the columns; ensure_schema runs first
+        rows = conn.execute(
+            text("SELECT id, lost_reason, lost_category FROM job_applications "
+                 "WHERE lost_reason IS NOT NULL AND lost_reason != ''")
+        ).fetchall()
+        for app_id, reason, category in rows:
+            if reason not in _LOST_REASON_MIGRATION:
+                continue  # already free text, or already migrated
+            new_category, keep_text = _LOST_REASON_MIGRATION[reason]
+            # Never overwrite a category a human has already chosen. Someone
+            # could have edited the record between the deploy and this run.
+            if category:
+                new_category = category
+            conn.execute(
+                text("UPDATE job_applications SET lost_reason = :text, "
+                     "lost_category = :cat WHERE id = :id"),
+                {"text": keep_text, "cat": new_category, "id": app_id},
+            )
+
+
 def migrate_email_thread_people():
     """One-time migration: replace EmailThread's old single required
     ``person_id`` column with the new many-to-many ``email_thread_people``
