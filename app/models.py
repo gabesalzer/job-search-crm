@@ -815,6 +815,11 @@ class ChatMessage(Base):
     # for, since an alias resolves to a dated snapshot.
     model = Column(String(64))
     usage = Column(Text)
+    # The view this answer put on screen, as query-string parameters, or NULL
+    # for an answer that only spoke. Stored beside the answer that caused it:
+    # without it the transcript is a list of remarks with no record of which
+    # one changed what you are looking at, which is unreadable a day later.
+    view_spec = Column(Text)
     created_at = Column(DateTime, default=_utcnow)
 
 

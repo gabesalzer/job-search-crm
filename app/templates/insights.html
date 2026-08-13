@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Analytics · Job Search CRM{% endblock %}
+{% block title %}Insights · Job Search CRM{% endblock %}
 {% block body %}
 <style>
   /* One hue for everything on this page, deliberately. Every bar here is the
@@ -82,18 +82,113 @@
   table.timing td.blank,table.timing .blank{color:var(--neutral)}
 </style>
 
+<style>
+  /* --- Filter chips ------------------------------------------------------- */
+  .filterbar{display:flex;flex-wrap:wrap;gap:var(--s-2);align-items:center;
+    background:var(--accent-soft);border:1px solid #dbe3fb;
+    border-radius:var(--radius-lg);padding:var(--s-3) var(--s-4);
+    margin-bottom:var(--s-5)}
+  .filterbar .lead{font-size:var(--fs-sm);font-weight:600;color:var(--ink)}
+  .chip{display:inline-flex;align-items:center;gap:var(--s-1);background:#fff;
+    border:1px solid var(--line-strong);border-radius:999px;
+    padding:2px var(--s-2) 2px var(--s-3);font-size:var(--fs-xs);
+    color:var(--ink)}
+  .chip a{color:var(--neutral);font-weight:700;line-height:1;padding:0 2px}
+  .chip a:hover{color:var(--down);text-decoration:none}
+  .filterbar .count{font-size:var(--fs-xs);color:var(--muted);
+    font-variant-numeric:tabular-nums}
+  .filterbar form{margin-left:auto}
+  .warn{background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius);
+    padding:var(--s-3) var(--s-4);margin-bottom:var(--s-5);font-size:var(--fs-sm)}
+  .warn ul{margin:var(--s-1) 0 0;padding-left:1.1rem}
+
+  /* --- Comparison table --------------------------------------------------- */
+  table.compare{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}
+  table.compare th{text-align:left;font-size:var(--fs-2xs);color:var(--muted);
+    font-weight:600;text-transform:uppercase;letter-spacing:0.03em;
+    padding:var(--s-3);border-bottom:1px solid var(--line);white-space:nowrap}
+  table.compare th.num,table.compare td.num{text-align:right;
+    font-variant-numeric:tabular-nums}
+  table.compare td{padding:var(--s-3);border-bottom:1px solid var(--line)}
+  table.compare tr:last-child td{border-bottom:none}
+  table.compare td.group{font-weight:600}
+  table.compare .thin{color:var(--neutral)}
+
+  /* --- Chat --------------------------------------------------------------- */
+  .askwrap{border-top:1px solid var(--line);padding-top:var(--s-6);
+    margin-top:var(--s-6)}
+  .turns{display:flex;flex-direction:column;gap:var(--s-4);
+    margin-bottom:var(--s-5)}
+  .turn{display:flex;flex-direction:column;gap:var(--s-1)}
+  .turn .who{font-size:var(--fs-2xs);color:var(--neutral);
+    text-transform:uppercase;letter-spacing:0.04em;font-weight:600}
+  .turn.you .bubble{background:var(--accent-soft);border:1px solid #dbe3fb;
+    border-radius:var(--radius-lg);padding:var(--s-3) var(--s-4);
+    font-size:var(--fs-md);font-weight:500}
+  .turn.model .bubble{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius-lg);padding:var(--s-4);box-shadow:var(--shadow-sm)}
+  .turn.model .bubble p{margin:0 0 var(--s-3);max-width:var(--w-prose);
+    font-size:var(--fs-md);line-height:1.6}
+  .turn.model .bubble p:last-child{margin-bottom:0}
+  .turn .prov{font-size:var(--fs-2xs);color:var(--neutral);
+    font-variant-numeric:tabular-nums}
+  .turn .didview{font-size:var(--fs-2xs);color:var(--accent);font-weight:500}
+  .composer textarea{min-height:72px;resize:vertical}
+  .composerrow{display:flex;gap:var(--s-3);align-items:flex-start;
+    margin-top:var(--s-2)}
+  .composerrow .note{font-size:var(--fs-2xs);color:var(--neutral);
+    max-width:60ch;line-height:1.5;margin:0}
+  .startpoints{margin:var(--s-4) 0 0;display:flex;gap:var(--s-2);flex-wrap:wrap}
+  .startpoints button{background:#fff;border:1px solid var(--line-strong);
+    border-radius:999px;padding:var(--s-1) var(--s-3);font-size:var(--fs-xs);
+    color:var(--muted);cursor:pointer;font-family:inherit}
+  .startpoints button:hover{border-color:var(--neutral);color:var(--ink)}
+</style>
+
 <div class="anlcol">
-  <h1>Analytics</h1>
+  <h1>Insights</h1>
   <p class="subtitle">
     How long the pipeline takes and where it leaks, measured off real dated
-    stage transitions rather than current position. Every figure carries the
-    number of records behind it, because at this scale that is usually the more
-    important half.
+    stage transitions. Every figure carries the number of records behind it,
+    because at this scale that is usually the more important half.
   </p>
 
+  {% if rejected %}
+    <div class="warn">
+      <strong>Part of that view wasn't applied.</strong>
+      <ul>{% for r in rejected %}<li>{{ r }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
+
+  {% if chips %}
+    {# The filter is drawn, not implied. Every chart below is computed from a
+       subset, and a page that narrows silently is a page that will eventually
+       be read as if it showed everything. #}
+    <div class="filterbar">
+      <span class="lead">Showing</span>
+      {% for chip in chips %}
+        <span class="chip">{{ chip.label }}
+          <a href="{{ chip.href }}" title="Remove">×</a>
+        </span>
+      {% endfor %}
+      <span class="count">{{ total }} of {{ unfiltered_total }} applications</span>
+      <form method="post" action="/ui/insights/reset">
+        <button type="submit" class="linkbtn">Clear all</button>
+      </form>
+    </div>
+  {% endif %}
+
+
   {% if total == 0 %}
+    {# Two different nothings, and conflating them is how a filter gets
+       mistaken for an empty database. #}
     <div class="empty" style="padding:var(--s-7) 0">
-      Nothing to measure yet — no applications on the record.
+      {% if filtered %}
+        No application matches this filter. Clear it above to see the pipeline
+        again.
+      {% else %}
+        Nothing to measure yet — no applications on the record.
+      {% endif %}
     </div>
   {% else %}
 
@@ -245,5 +340,140 @@
   </div>
 
   {% endif %}
+
+  {% if comparison %}
+  <div class="anl-sec">
+    <h2>Compared by {{ compare_by.replace('_', ' ') }}</h2>
+    <p class="note">
+      A table rather than one funnel per group, deliberately. Splitting a
+      pipeline this size into groups leaves each with a handful of records, and
+      a bar chart drawn over two of them looks far more certain than it is. The
+      sample size sits in every cell instead.
+    </p>
+    <div class="tablewrap">
+      <table class="compare">
+        <thead>
+          <tr>
+            <th>{{ compare_by.replace('_', ' ')|capitalize }}</th>
+            <th class="num">Applications</th>
+            {% for iv in intervals %}<th class="num">{{ iv.label }}</th>{% endfor %}
+            <th class="num">Reached Discovery</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in comparison %}
+          <tr>
+            <td class="group">{{ row.name }}</td>
+            <td class="num">{{ row.total }}</td>
+            {% for iv in row.intervals %}
+              {% if iv.enough %}
+                <td class="num">{{ iv.mean }} <span class="thin">(n={{ iv.n }})</span></td>
+              {% elif iv.n %}
+                <td class="num thin">n={{ iv.n }}, too few</td>
+              {% else %}
+                <td class="num thin">—</td>
+              {% endif %}
+            {% endfor %}
+            <td class="num">
+              {% for f in row.funnel %}{% if f.stage == 'Discovery' %}{{ f.reached }}{% endif %}{% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="askwrap">
+    <h2 style="font-size:var(--fs-lg);font-weight:620;margin:0 0 var(--s-1)">Ask</h2>
+    <p class="note" style="color:var(--muted);font-size:var(--fs-sm);
+       margin:0 0 var(--s-4);max-width:var(--w-prose)">
+      Questions about anything on the record — what someone said, which pursuits
+      have gone quiet, a draft follow-up. Asking to narrow or compare
+      (&ldquo;just the referrals&rdquo;, &ldquo;compare by source&rdquo;)
+      re-filters the charts above. The figures are always computed from the
+      data, never written by the model.
+    </p>
+
+    {% if error %}
+      <div class="warn"><strong>Couldn't answer.</strong> {{ error }}</div>
+    {% endif %}
+
+    {% if not chat_enabled %}
+      <div class="warn">
+        <strong>Asking is off.</strong> Set <code>ANTHROPIC_API_KEY</code> in the
+        Render dashboard (or your local <code>.env</code>) and restart. The
+        charts above need no key and are unaffected.
+      </div>
+    {% endif %}
+
+    {% if messages %}
+      <div class="turns">
+        {% for m in messages %}
+          <div class="turn {% if m.role == 'user' %}you{% else %}model{% endif %}">
+            <div class="who">{% if m.role == 'user' %}You{% else %}Answer{% endif %}</div>
+            <div class="bubble">
+              {% for para in m.content.split('\n\n') %}
+                {% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}
+              {% endfor %}
+            </div>
+            {% if m.role != 'user' %}
+              {% if m.view_spec %}<div class="didview">↑ This answer re-filtered the charts.</div>{% endif %}
+              {% if m.model %}
+                <div class="prov">{{ m.model }}{% if m.created_at %} · {{ m.created_at.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}</div>
+              {% endif %}
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <div class="composer">
+      <form method="post" action="/ui/insights/ask{% if query %}?{{ query_string }}{% endif %}">
+        <textarea name="question" id="question"
+                  placeholder="Ask about the pipeline, or ask to narrow these charts…"
+                  {% if not chat_enabled %}disabled{% endif %}></textarea>
+        <div class="composerrow">
+          <button type="submit" class="btn" {% if not chat_enabled %}disabled{% endif %}>Ask</button>
+          <p class="note">
+            Each question sends all {{ unfiltered_total }}
+            application{{ '' if unfiltered_total == 1 else 's' }} — including full
+            meeting transcripts and email bodies — to {{ model_name }}, along
+            with the computed figures above.
+          </p>
+        </div>
+      </form>
+
+      {% if not messages %}
+        <div class="startpoints">
+          <button type="button" data-q="Compare my referrals against outbound applications.">Referral vs outbound</button>
+          <button type="button" data-q="Which pursuits have gone quiet, and for how long?">What's gone quiet?</button>
+          <button type="button" data-q="Across every interview, what concerns came up about my fit?">Concerns about my fit</button>
+          <button type="button" data-q="Show me only the applications I lost, and tell me what they had in common.">Just the losses</button>
+        </div>
+      {% endif %}
+
+      {% if messages %}
+        <form method="post" action="/ui/chat/clear" style="margin-top:var(--s-3)"
+              onsubmit="return confirm('Delete the whole conversation? This cannot be undone.')">
+          <button type="submit" class="linkbtn">Clear conversation</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll('.startpoints button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var box = document.getElementById('question');
+      box.value = b.dataset.q;
+      box.focus();
+    });
+  });
+</script>
 {% endblock %}

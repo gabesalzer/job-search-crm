@@ -11,7 +11,7 @@ import pathlib
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -24,6 +24,7 @@ from .. import chat as chat_model
 from .. import forecast as forecast_model
 from .. import models
 from .. import thread_read
+from .. import viewspec
 from ..database import get_db
 from ..services import granola, llm
 from ..services.email_parse import parse_gmail_export
@@ -1841,7 +1842,7 @@ CHAT_HISTORY_TURNS = 12
 CHAT_MAX_TOKENS = 2000
 
 
-def _chat_corpus(db: Session) -> str:
+def _chat_corpus(db: Session, analytics: Optional[dict] = None) -> str:
     """Walk every application into the plain dicts `chat.build_corpus` wants.
 
     One eager load for the whole page rather than per-application lazy loads:
@@ -1950,7 +1951,7 @@ def _chat_corpus(db: Session) -> str:
                 for t in a.email_threads
             ],
         })
-    return chat_model.build_corpus(payload)
+    return chat_model.build_corpus(payload, analytics=analytics)
 
 
 def _chat_history(db: Session) -> List[models.ChatMessage]:
@@ -1962,58 +1963,14 @@ def _chat_history(db: Session) -> List[models.ChatMessage]:
 
 
 @router.get("/chat")
-def chat_page(request: Request, error: str = "", db: Session = Depends(get_db)):
-    messages = _chat_history(db)
-    return templates.TemplateResponse(request, "chat.html", {
-        "active": "chat",
-        "messages": messages,
-        "chat_enabled": llm.enabled(),
-        "model_name": llm.model_name(),
-        "error": error,
-        # Shown once, under the composer, rather than as a warning on every
-        # answer. The breadth of what gets sent is a real fact about this
-        # feature and hiding it would be dishonest; repeating it every turn
-        # would train you to stop reading it.
-        "application_count": db.query(models.JobApplication).count(),
-    })
+def chat_redirect():
+    """The chat and the analytics page merged into /insights.
 
-
-@router.post("/ui/chat")
-def chat_ask(question: str = Form(""), db: Session = Depends(get_db)):
-    question = (question or "").strip()
-    if not question:
-        return RedirectResponse(url="/chat", status_code=303)
-
-    history = [{"role": m.role, "content": m.content} for m in _chat_history(db)]
-
-    # The question is stored before the call, not after it. An API failure
-    # should not also lose what you typed -- retyping a long question because
-    # the model timed out is a small insult on top of an injury, and the row is
-    # a true record either way: you did ask it.
-    db.add(models.ChatMessage(role="user", content=question))
-    db.commit()
-
-    usage: dict = {}
-    try:
-        text, model_used = llm.generate(
-            chat_model.build_system_blocks(_chat_corpus(db)),
-            chat_model.build_messages(history, question,
-                                      max_turns=CHAT_HISTORY_TURNS),
-            max_tokens=CHAT_MAX_TOKENS,
-            usage_out=usage,
-        )
-    except llm.LLMError as exc:
-        return RedirectResponse(
-            url="/chat?error={}".format(quote(str(exc))), status_code=303)
-
-    db.add(models.ChatMessage(
-        role="assistant",
-        content=text,
-        model=model_used,
-        usage=json.dumps(usage) if usage else None,
-    ))
-    db.commit()
-    return RedirectResponse(url="/chat", status_code=303)
+    Kept as a redirect rather than deleted: this URL has been in the nav, in
+    the README, and in Gabe's browser history. A 301 costs one line and means
+    nothing that already points here breaks.
+    """
+    return RedirectResponse(url="/insights", status_code=301)
 
 
 @router.post("/ui/chat/clear")
@@ -2027,12 +1984,9 @@ def chat_clear(db: Session = Depends(get_db)):
     """
     db.query(models.ChatMessage).delete()
     db.commit()
-    return RedirectResponse(url="/chat", status_code=303)
+    return RedirectResponse(url="/insights", status_code=303)
 
 
-# --------------------------------------------------------------------------- #
-# Analytics: how long the pipeline takes, and where it leaks
-# --------------------------------------------------------------------------- #
 def _analytics_apps(db: Session) -> List[dict]:
     """Every application flattened into the plain dicts `analytics.py` wants.
 
@@ -2045,6 +1999,7 @@ def _analytics_apps(db: Session) -> List[dict]:
         .options(
             selectinload(models.JobApplication.stage_history),
             selectinload(models.JobApplication.company),
+            selectinload(models.JobApplication.resume),
         )
         .all()
     )
@@ -2061,6 +2016,10 @@ def _analytics_apps(db: Session) -> List[dict]:
             "created_at": _naive_utc(a.created_at),
             "lost_category": a.lost_category.value if a.lost_category else None,
             "lost_reason": a.lost_reason,
+            # Carried so the view can be filtered or compared by resume --
+            # "does v3 actually get further than v2" is one of the few
+            # questions this dataset can answer that the board cannot.
+            "resume_label": a.resume.label if a.resume else None,
             "stage_history": [
                 {
                     "from_stage": h.from_stage.value if h.from_stage else None,
@@ -2075,10 +2034,166 @@ def _analytics_apps(db: Session) -> List[dict]:
 
 
 @router.get("/analytics")
-def analytics_page(request: Request, db: Session = Depends(get_db)):
-    payload = analytics_model.overview(_analytics_apps(db), STAGE_ORDER_VALUES)
-    return templates.TemplateResponse(request, "analytics.html", {
-        "active": "analytics",
+def analytics_redirect():
+    """Merged into /insights. Redirect rather than delete -- see chat_redirect."""
+    return RedirectResponse(url="/insights", status_code=301)
+
+
+def _vocabulary(apps: List[dict]) -> dict:
+    """The values that actually exist, for validating a proposed filter.
+
+    Built from the data rather than from the enums, and the difference matters.
+    `LostCategory` has nine members but a pipeline might only have used two, and
+    a filter on a category no record carries returns an empty cohort -- which
+    renders as "not enough data", indistinguishable from a real finding.
+    Validating against what is present turns that silent emptiness into a
+    visible rejection.
+    """
+    def seen(key):
+        return sorted({str(a.get(key)) for a in apps if a.get(key)})
+    return {
+        "source": seen("source"),
+        "stage": seen("stage"),
+        "lost_category": seen("lost_category"),
+        "resume": seen("resume_label"),
+        "company": seen("company"),
+    }
+
+
+def _insights_context(db: Session, params: dict) -> dict:
+    """Everything the merged page renders, filtered by the query string.
+
+    The filter is read from the URL on every request rather than held in a
+    session, so a chat-driven view is a link: shareable, bookmarkable, and
+    undoable with the back button. Undoing the chat never requires the chat.
+    """
+    apps = _analytics_apps(db)
+    spec, rejected = viewspec.from_query(params, vocabulary=_vocabulary(apps))
+    # Rejections raised while parsing the model's proposal travel here in the
+    # query string, because they happened on the POST and have to survive the
+    # redirect. Shown alongside any raised by the URL itself.
+    carried = (params.get("rejected") or "").strip()
+    if carried:
+        rejected = [carried] + rejected
+    visible = viewspec.apply(apps, spec)
+
+    payload = analytics_model.overview(visible, STAGE_ORDER_VALUES)
+    comparison = []
+    for name, group in viewspec.cohorts(visible, spec.get("compare_by")):
+        summary = analytics_model.overview(group, STAGE_ORDER_VALUES)
+        comparison.append({
+            "name": name,
+            "total": summary["total"],
+            "intervals": summary["intervals"],
+            "funnel": summary["funnel"],
+        })
+
+    query = viewspec.to_query(spec)
+    # Each chip carries the link that removes it, built here rather than in the
+    # template: "the URL minus this one parameter" is a computation, and Jinja
+    # is the wrong place to do computations you want to be able to test.
+    chips = []
+    for chip in viewspec.describe(spec):
+        remaining = {k: v for k, v in query.items() if k != chip["param"]}
+        chip["href"] = "/insights" + ("?" + urlencode(remaining) if remaining else "")
+        chips.append(chip)
+
+    return {
+        "active": "insights",
         "stage_order": STAGE_ORDER_VALUES,
+        "chips": chips,
+        "query_string": urlencode(query),
+        "rejected": rejected,
+        "filtered": bool(spec),
+        "compare_by": spec.get("compare_by"),
+        "comparison": comparison,
+        # The unfiltered count, so the chip row can say "6 of 11" rather than
+        # leaving a suddenly-small pipeline looking like data loss.
+        "unfiltered_total": len(apps),
+        "query": query,
+        "messages": _chat_history(db),
+        "chat_enabled": llm.enabled(),
+        "model_name": llm.model_name(),
         **payload,
-    })
+    }
+
+
+@router.get("/insights")
+def insights_page(request: Request, error: str = "", db: Session = Depends(get_db)):
+    context = _insights_context(db, dict(request.query_params))
+    context["error"] = error
+    return templates.TemplateResponse(request, "insights.html", context)
+
+
+@router.post("/ui/insights/ask")
+def insights_ask(request: Request, question: str = Form(""),
+                 db: Session = Depends(get_db)):
+    question = (question or "").strip()
+    current = {k: v for k, v in request.query_params.items()}
+    back = "/insights" + ("?" + urlencode(current) if current else "")
+    if not question:
+        return RedirectResponse(url=back, status_code=303)
+
+    apps = _analytics_apps(db)
+    vocabulary = _vocabulary(apps)
+    active, _ = viewspec.from_query(current, vocabulary=vocabulary)
+    chips = viewspec.describe(active)
+
+    history = [{"role": m.role, "content": m.content} for m in _chat_history(db)]
+
+    # Stored before the call, so a timeout does not also cost the question.
+    db.add(models.ChatMessage(role="user", content=question))
+    db.commit()
+
+    usage: dict = {}
+    try:
+        text, model_used = llm.generate(
+            chat_model.build_system_blocks(
+                # The analytics handed to the model are the *unfiltered*
+                # pipeline, matching the cached corpus. The filter currently on
+                # screen travels on the question turn instead -- see
+                # chat._analytics_block for why the two are separated.
+                _chat_corpus(db, analytics_model.overview(apps, STAGE_ORDER_VALUES))),
+            chat_model.build_messages(
+                history, question, max_turns=CHAT_HISTORY_TURNS,
+                view_note="; ".join(c["label"] for c in chips) or "everything"),
+            max_tokens=CHAT_MAX_TOKENS,
+            usage_out=usage,
+        )
+    except llm.LLMError as exc:
+        sep = "&" if current else "?"
+        return RedirectResponse(
+            url="{}{}error={}".format(back, sep, quote(str(exc))), status_code=303)
+
+    prose, block = viewspec.extract_block(text)
+    proposed, rejected = viewspec.parse(block, vocabulary=vocabulary)
+
+    db.add(models.ChatMessage(
+        role="assistant",
+        content=prose or text,
+        model=model_used,
+        usage=json.dumps(usage) if usage else None,
+        # What the answer did to the view, kept beside the answer that did it.
+        # Without this the transcript reads as a series of remarks with no
+        # record of which one changed what you are looking at.
+        view_spec=json.dumps(viewspec.to_query(proposed)) if proposed else None,
+    ))
+    db.commit()
+
+    # A proposed view replaces the current one rather than merging into it.
+    # Merging looks helpful and is not: two questions in a row would silently
+    # intersect into a cohort nobody asked for, and the only way back would be
+    # to notice and undo it by hand.
+    destination = "/insights"
+    query = viewspec.to_query(proposed) if proposed else {}
+    if rejected:
+        query["rejected"] = " ".join(rejected)
+    if query:
+        destination += "?" + urlencode(query)
+    return RedirectResponse(url=destination, status_code=303)
+
+
+@router.post("/ui/insights/reset")
+def insights_reset():
+    """Drop every filter. One click, no question asked of the model."""
+    return RedirectResponse(url="/insights", status_code=303)

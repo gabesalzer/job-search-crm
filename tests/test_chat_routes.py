@@ -1,5 +1,10 @@
 """End-to-end tests for the chat, against the real app.
 
+The chat lives on /insights now, merged with the analytics page.
+These tests followed it rather than being rewritten: what they pin
+-- the adapter, the cached block, history round-tripping, the
+failed-call path -- is unchanged by where the box is drawn.
+
 Same shape and same reasoning as `test_thread_read_routes.py`: boot the real
 app against a temporary SQLite database with only the network call stubbed.
 The corpus builder itself is covered by `test_chat.py` with literals; what can
@@ -73,7 +78,7 @@ def _reset(reply="Two have gone quiet."):
 
 
 def _ask(question):
-    resp = client.post("/ui/chat", data={"question": question},
+    resp = client.post("/ui/insights/ask", data={"question": question},
                        follow_redirects=False)
     assert resp.status_code == 303, resp.text
     return resp
@@ -150,9 +155,13 @@ _seed()
 # --------------------------------------------------------------------------- #
 def test_the_page_renders_before_anything_is_asked():
     _reset()
-    resp = client.get("/chat")
+    resp = client.get("/insights")
     assert resp.status_code == 200
-    assert "Nothing asked yet" in resp.text
+    # With no conversation yet the starter questions stand in for an empty
+    # state; they fill the box rather than submitting, so none of them costs
+    # anything until it is read and sent.
+    assert "Referral vs outbound" in resp.text
+    assert "Clear conversation" not in resp.text
     assert CALLS["n"] == 0, "loading the page must not cost an API call"
 
 
@@ -165,7 +174,7 @@ def test_asking_stores_both_turns_and_shows_the_answer():
     assert rows[1][1] == "Two have gone quiet."
     assert rows[1][2] == "test-model", "the model that answered is recorded"
     assert json.loads(rows[1][3])["cache_read_input_tokens"] == 88_000
-    body = client.get("/chat").text
+    body = client.get("/insights").text
     assert "Two have gone quiet." in body
 
 
@@ -219,7 +228,11 @@ def test_history_is_replayed_and_the_new_question_is_last():
     roles = [m["role"] for m in SENT["messages"]]
     assert roles == ["user", "assistant", "user"]
     assert SENT["messages"][0]["content"] == "first question"
-    assert SENT["messages"][-1]["content"] == "second question"
+    # The live question now carries a note about what the charts are showing.
+    # It rides here, on the uncached turn, rather than in the corpus -- see
+    # chat._analytics_block. `in` rather than `==` is the point of the test.
+    assert "second question" in SENT["messages"][-1]["content"]
+    assert "currently showing" in SENT["messages"][-1]["content"]
 
 
 def test_a_failed_call_keeps_the_question():
@@ -250,7 +263,7 @@ def test_a_failed_call_keeps_the_question():
 def test_an_empty_question_costs_nothing():
     _reset()
     before = CALLS["n"]
-    client.post("/ui/chat", data={"question": "   "}, follow_redirects=False)
+    client.post("/ui/insights/ask", data={"question": "   "}, follow_redirects=False)
     assert CALLS["n"] == before
     assert _messages() == []
 
@@ -266,7 +279,7 @@ def test_clearing_deletes_the_conversation():
 
 def test_the_nav_link_is_present_on_another_page():
     resp = client.get("/board")
-    assert 'href="/chat"' in resp.text
+    assert 'href="/insights"' in resp.text
 
 
 if __name__ == "__main__":

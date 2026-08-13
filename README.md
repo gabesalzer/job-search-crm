@@ -204,37 +204,32 @@ score threads by hand; every other feature works identically.
   and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
   no key the panel simply doesn't appear and nothing else about the app
   changes.
-- **Analytics**: how long the pipeline takes and where it leaks. Three
-  durations — how long you work an angle in before committing (Staging →
-  Qualification), how long from submitting until someone actually engages
-  (Applied → Discovery), and full cycle time — plus a drop-off funnel, a
-  breakdown of why the lost ones were lost, and a table of every application
-  with its own timings. Two things make it trustworthy rather than merely
-  impressive. Every figure carries the number of records behind it, and an
-  average built on fewer than three says "not enough data" instead of showing
-  a number that is really just one pursuit; the suppression lives in the data,
-  so the JSON API can't render one either. And the funnel counts an
-  application toward every stage it must have passed through, not just the
-  ones with a history row — without that, a later stage can report more
-  applications than an earlier one, which is not a funnel. Needs no API key.
-- **Ask**: a chat page that answers questions about the pipeline from what's
-  recorded in it — what someone actually said in an interview, which pursuits
-  have gone quiet and for how long, what you committed to and haven't done, a
-  draft follow-up in your own voice. It is the one feature that reads *across*
-  applications, which is what the board and the Brief can't do: both show you
-  one record at a time, and a question like "who has mentioned budget
-  pressure" doesn't live in any single one. The whole record is assembled into
-  one packet on every question, so answers cite dates and companies rather
-  than summarising vaguely, and the prompt tells it to say "that isn't
-  recorded" rather than fill a gap — a confident wrong answer about your own
-  pipeline is worse than no answer. Because a full pipeline can run past the
-  packet's ceiling, verbatim text is spent newest-first: structured facts
-  about every application always go in, and if something has to be dropped it
-  is the oldest transcript, marked as dropped rather than silently missing.
-  The conversation is stored so it survives a page load, and *Clear
-  conversation* really deletes it — worth having, since the transcript
-  accumulates quoted fragments of other people's emails. Requires
-  `ANTHROPIC_API_KEY`.
+- **Insights**: the analytics and the chat on one page, because they answer the
+  same question from two directions. On top: three durations — how long you
+  work an angle in before committing (Staging → Qualification), how long from
+  submitting until someone engages (Applied → Discovery), and full cycle time —
+  plus a drop-off funnel, a breakdown of why the lost ones were lost, and a
+  table of every application with its own timings. Underneath: ask anything
+  about the record, including *asking to change what the charts show*
+  ("compare referrals against outbound", "just the ones since June").
+
+  The rule that makes the two safe on one screen: **the model chooses which
+  records to look at, and never produces a number.** It emits a filter, which
+  is validated against the values that actually exist, applied by the same
+  code that computes everything else, and drawn on screen as removable chips
+  encoded in the URL — so a chat-driven view is a link you can share, bookmark,
+  and undo with the back button. A value no record carries is refused and
+  reported rather than silently returning an empty cohort. And the chat is
+  handed the *computed* figures rather than left to derive them, so it can't
+  quietly disagree with the tile six inches above it.
+
+  Every figure carries the number of records behind it, and an average built on
+  fewer than three says "not enough data" instead of showing a number that is
+  really just one pursuit. The suppression lives in the data, so the JSON API
+  can't render one either. The funnel counts an application toward every stage
+  it must have passed through, not only the ones with a history row — without
+  that a later stage can report more applications than an earlier one, which is
+  not a funnel. The charts need no API key; only asking does.
 - **A second opinion**: `skills/application-viability/` is a Claude Skill —
   instructions, not code — that reads a transcript, an email thread, or an
   application's context and returns its own 0–100 score with a one-line

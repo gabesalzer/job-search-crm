@@ -1381,6 +1381,74 @@ handful of records the rows are frankly more informative than the summary above
 them — an average of four hides both the spread and which pursuit produced
 which number.
 
+## The chat drives the charts, and the boundary on how far
+
+Analytics and Ask were separate pages and are now one, `/insights`. They answer
+the same question from two directions — one computes, one explains — and split
+across two tabs each was half an answer. The merge introduced exactly one new
+capability and one new hazard, and `app/viewspec.py` is the whole of both.
+
+### The rule: the model picks records, never numbers
+
+A model handed a pile of transcripts and asked "how long until someone engages"
+will do arithmetic in its head and answer confidently. That answer can differ
+from the tile six inches above it, and it respects none of the rules the tile
+follows — not the min-3 floor, not the dated-transitions-only requirement, not
+the exclusion of negative intervals. Two numbers on one screen disagreeing is
+worse than either alone.
+
+So the chat gets the **computed** figures as facts to quote (a
+`== PIPELINE ANALYTICS ==` block at the top of the corpus), and its only power
+over the page is to change **which applications those figures are computed
+from**. It emits a filter; `analytics.py` still does every calculation.
+
+The worst a wrong filter can do is show correct arithmetic over the wrong
+cohort — and that is *visible*, because the filter is drawn as chips and lives
+in the URL. The alternative failure, a model-authored figure that is quietly
+wrong, has nothing on screen to check it against.
+
+### Validation is against the data, not the enum
+
+A proposed value is checked against the values that actually appear in this
+database, not against the Python enum. `LostCategory` has nine members but a
+pipeline may have used two, and filtering on a category no record carries
+returns an empty cohort — which renders as "not enough data", indistinguishable
+from a real finding. Validating against what is present turns silent emptiness
+into a visible rejection. The rejection is shown to the reader, not swallowed.
+
+The same validation runs on filters arriving from the query string, because the
+URL is hand-editable and linkable. There is no privileged source of specs.
+
+### The URL is the only store
+
+A chat-driven view is a link: shareable, bookmarkable, undoable with the back
+button, and clearable by a button that asks the model nothing. Holding the
+filter in a session would have made the chat the only way to undo the chat.
+
+Two smaller rules fall out of it. A new view **replaces** rather than merges
+with the current one — two questions in a row would otherwise silently
+intersect into a cohort nobody asked for, discoverable only by noticing. And
+the fenced ```view block is stripped from the reply before storage, so raw JSON
+never renders in the transcript, while `ChatMessage.view_spec` records what
+each answer did to the page.
+
+### Caching survives the filter
+
+The corpus, including the analytics block, is the **unfiltered** pipeline and
+sits in the cached system block. The filter currently on screen rides on the
+question turn instead, which is uncached and a single line. Making the cached
+half track the filter would rewrite the cache on every view change and cost
+more than the whole feature saves.
+
+### Comparison is a table, not N charts
+
+`compare_by` groups the figures. It renders as a table with the sample size in
+every cell rather than one funnel per group, and that is a judgment about this
+dataset: six applications split three ways gives three funnels of two, each
+drawing a confident-looking bar chart over a sample far too small to average.
+The table says the same thing without the chart lending it authority it has not
+earned.
+
 ## Closed Lost: one picklist to count by, one free field to remember by
 
 `lost_category` is an enum of nine causes; `lost_reason` is plain text for the

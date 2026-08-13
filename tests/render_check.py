@@ -257,6 +257,14 @@ analytics_thin = analytics_model.overview([
      "stage_history": []},
 ], ANALYTICS_STAGES)
 
+INSIGHTS_BASE = {
+    "active": "insights", "stage_order": ANALYTICS_STAGES,
+    "chips": [], "rejected": [], "filtered": False, "compare_by": None,
+    "comparison": [], "query": {}, "query_string": "",
+    "messages": [], "chat_enabled": True, "model_name": "claude-sonnet-5",
+    "error": "",
+}
+
 cases = [
     ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
     ("posting_edit.html", {"active": "postings", "posting": posting}),
@@ -581,81 +589,87 @@ cases = [
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
     }),
-    # --- Analytics ---------------------------------------------------------
-    # The fixtures come from the real module rather than hand-written literals,
-    # for the same reason the forecast ones do: a transcribed payload can drift
-    # from what the app actually emits and go on passing while it does.
-    ("analytics.html", {"active": "analytics", "stage_order": ANALYTICS_STAGES,
-                        **analytics_populated}),
-    # Nothing recorded at all -- the state a fresh clone opens in, and the one
-    # where every number would be a division by zero if it were computed.
-    ("analytics.html (empty)", {"active": "analytics",
-                                "stage_order": ANALYTICS_STAGES,
-                                **analytics_empty}),
+    # --- Insights (analytics + chat, merged) -------------------------------
+    # Fixtures come from the real modules rather than hand-written literals,
+    # for the same reason the forecast ones do: a transcribed payload drifts
+    # from what the app emits and goes on passing while it does.
+    ("insights.html", {**INSIGHTS_BASE, **analytics_populated,
+                       "unfiltered_total": analytics_populated["total"],
+                       "messages": [
+                           SimpleNamespace(id=1, role="user", model=None, usage=None,
+                                           view_spec=None, created_at=datetime(2026, 8, 7, 9, 0),
+                                           content="Compare referrals against outbound."),
+                           SimpleNamespace(id=2, role="assistant", model="claude-sonnet-5",
+                                           usage='{"cache_read_input_tokens": 88000}',
+                                           view_spec='{"compare_by": "source"}',
+                                           created_at=datetime(2026, 8, 7, 9, 0, 12),
+                                           content=("Referrals reach Discovery more often.\n\n"
+                                                    "The sample is small either way.")),
+                       ]}),
+    # Nothing recorded at all -- what a fresh clone opens on, and the state
+    # where every figure would divide by zero if it were computed.
+    ("insights.html (empty)", {**INSIGHTS_BASE, **analytics_empty,
+                               "unfiltered_total": 0}),
     # Records exist but almost none can be timed. This is the state Gabe's own
-    # pipeline is actually in, so it is the one that has to read well: every
-    # tile says why it has no number instead of showing a blank or a 1-record
-    # average, and the funnel still draws.
-    ("analytics.html (below the sample floor)", {"active": "analytics",
-                                                 "stage_order": ANALYTICS_STAGES,
-                                                 **analytics_thin}),
-    # --- Chat --------------------------------------------------------------
-    # A conversation in progress. The assistant turn is deliberately
-    # multi-paragraph, because the template splits on a blank line to make
-    # paragraphs and a single-paragraph fixture would never exercise that.
-    ("chat.html", {
-        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
-        "error": "", "application_count": 7,
-        "messages": [
-            SimpleNamespace(id=1, role="user", content="Which pursuits have gone quiet?",
-                            model=None, usage=None,
-                            created_at=datetime(2026, 8, 5, 9, 0)),
-            SimpleNamespace(
-                id=2, role="assistant",
-                content=("Two. Condor has been quiet 19 days since the panel on 17 July.\n\n"
-                         "Plaid has been quiet 31 days since the recruiter screen."),
-                model="claude-sonnet-5", usage='{"cache_read_input_tokens": 88000}',
-                created_at=datetime(2026, 8, 5, 9, 0, 12)),
+    # pipeline is in, so it is the one that has to read well.
+    ("insights.html (below the sample floor)", {**INSIGHTS_BASE, **analytics_thin,
+                                                "unfiltered_total": analytics_thin["total"]}),
+    # A filter is on: chips draw, the count says how much of the pipeline is
+    # hidden, and every chip carries the link that removes it.
+    ("insights.html (filtered)", {
+        **INSIGHTS_BASE, **analytics_thin, "unfiltered_total": 9, "filtered": True,
+        "chips": [{"param": "source", "label": "source is Referral",
+                   "href": "/insights"},
+                  {"param": "since", "label": "applied on or after 2026-06-01",
+                   "href": "/insights?source=Referral"}],
+        "query": {"source": "Referral", "since": "2026-06-01"},
+        "query_string": "source=Referral&since=2026-06-01",
+    }),
+    # The filter matched nothing. Must not read as an empty database, and the
+    # chat has to survive so you can ask your way back out.
+    ("insights.html (filtered to nothing)", {
+        **INSIGHTS_BASE, **analytics_empty, "unfiltered_total": 9, "filtered": True,
+        "chips": [{"param": "company", "label": "company is Northwind",
+                   "href": "/insights"}],
+    }),
+    # Part of a proposed view was refused -- the path a hallucinated value takes.
+    ("insights.html (view partly rejected)", {
+        **INSIGHTS_BASE, **analytics_thin,
+        "unfiltered_total": analytics_thin["total"],
+        "rejected": ["source: no record has 'Carrier Pigeon' — that filter was dropped.",
+                     "'vibes' isn't a field on an application."],
+    }),
+    # A comparison. Renders as a table because N funnels of two would each draw
+    # a confident bar chart over a sample too small to average.
+    ("insights.html (compared by source)", {
+        **INSIGHTS_BASE, **analytics_populated,
+        "unfiltered_total": analytics_populated["total"],
+        "compare_by": "source",
+        "comparison": [
+            {"name": "Referral", "total": 3,
+             "intervals": analytics_populated["intervals"],
+             "funnel": analytics_populated["funnel"]},
+            {"name": "Not recorded", "total": 1,
+             "intervals": analytics_empty["intervals"],
+             "funnel": analytics_empty["funnel"]},
         ],
     }),
-    # Nothing asked yet: the starter chips render and the clear button must
-    # not. This is the state the page opens in and the one most seen.
-    ("chat.html (empty)", {
-        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
-        "error": "", "application_count": 0, "messages": [],
-    }),
-    # No key -- what anyone cloning the public repo sees. Composer disabled,
-    # and nothing may reach for a model name off a message that isn't there.
-    ("chat.html (disabled)", {
-        "active": "chat", "chat_enabled": False, "model_name": "claude-sonnet-5",
-        "error": "", "application_count": 3, "messages": [],
-    }),
-    # A failed call. The question was stored before the API was called, so the
-    # transcript ends on a user turn with no answer under it -- a shape the
-    # happy path never produces and the alternating-role loop has to survive.
-    ("chat.html (error, unanswered question)", {
-        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
-        "error": "The request timed out after 180s. A very long transcript can do this; try again.",
-        "application_count": 7,
-        "messages": [
-            SimpleNamespace(id=1, role="user", content="Draft a follow-up to Todd.",
-                            model=None, usage=None,
-                            created_at=datetime(2026, 8, 5, 9, 0)),
-        ],
-    }),
-    # An assistant turn stored before `model` existed, or written by a path
-    # that never set it. ADD COLUMN backfills NULL, so this is what every row
-    # predating the column looks like; the provenance line has to disappear
-    # rather than print "None".
-    ("chat.html (answer with no model recorded)", {
-        "active": "chat", "chat_enabled": True, "model_name": "claude-sonnet-5",
-        "error": "", "application_count": 1,
-        "messages": [
-            SimpleNamespace(id=1, role="user", content="Anything from Condor?",
-                            model=None, usage=None, created_at=None),
-            SimpleNamespace(id=2, role="assistant", content="Nothing since 17 July.",
-                            model=None, usage=None, created_at=None),
-        ],
+    # No API key: the composer switches off and the charts are unaffected.
+    ("insights.html (asking disabled)", {**INSIGHTS_BASE, **analytics_populated,
+                                         "unfiltered_total": 4,
+                                         "chat_enabled": False}),
+    # A failed call leaves a user turn with no answer under it, and an
+    # assistant row predating the `model` column renders without provenance.
+    ("insights.html (error, unanswered question)", {
+        **INSIGHTS_BASE, **analytics_thin,
+        "unfiltered_total": analytics_thin["total"],
+        "error": "The request timed out after 180s.",
+        "messages": [SimpleNamespace(id=1, role="user", content="Draft a note to Todd.",
+                                     model=None, usage=None, view_spec=None,
+                                     created_at=None),
+                     SimpleNamespace(id=2, role="assistant", content="Older answer.",
+                                     model=None, usage=None, view_spec=None,
+                                     created_at=None)],
     }),
 ]
 

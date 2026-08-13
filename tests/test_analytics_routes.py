@@ -53,7 +53,7 @@ def _company(db, name):
 
 
 def _make(db, name, *, stage, applied=None, history=(), lost_category=None,
-          lost_reason=None):
+          lost_reason=None, source="Referral"):
     """Create an application with a hand-written stage history.
 
     History is written directly rather than by assigning `stage` repeatedly,
@@ -66,6 +66,7 @@ def _make(db, name, *, stage, applied=None, history=(), lost_category=None,
         lost_category=(models.LostCategory(lost_category)
                        if lost_category else None),
         lost_reason=lost_reason,
+        source=models.ApplicationSource(source) if source else None,
     )
     db.add(appn)
     db.flush()
@@ -90,6 +91,7 @@ def _seed():
             ("Staging", BASE), ("Qualification", BASE + 10 * DAY),
             ("Discovery", BASE + 22 * DAY)])
         _make(db, "Plaid", stage="Closed Lost", applied=BASE + 2 * DAY,
+              source="Outbound",
               lost_category="Compensation gap",
               lost_reason="Band topped out 30k under.", history=[
                   ("Staging", BASE), ("Qualification", BASE + 8 * DAY),
@@ -99,7 +101,7 @@ def _seed():
             ("Staging", BASE - 6 * DAY), ("Qualification", BASE),
             ("Discovery", BASE + 9 * DAY), ("Negotiation", BASE + 30 * DAY)])
         # No applied date, no history: contributes to `total` and to nothing else.
-        _make(db, "LanceDB", stage="Staging")
+        _make(db, "LanceDB", stage="Staging", source=None)
         db.commit()
 
 
@@ -108,7 +110,7 @@ _seed()
 
 # --------------------------------------------------------------------------- #
 def test_the_page_renders_and_shows_the_headline_intervals():
-    resp = client.get("/analytics")
+    resp = client.get("/insights")
     assert resp.status_code == 200, resp.text
     body = resp.text
     assert "Staging to Qualification" in body
@@ -138,7 +140,7 @@ def test_averages_appear_only_once_three_records_can_answer():
 
 
 def test_the_page_says_not_enough_data_rather_than_showing_a_number():
-    body = client.get("/analytics").text
+    body = client.get("/insights").text
     assert "Not enough data" in body
     assert "Only 1 record can answer this" in body
 
@@ -167,7 +169,7 @@ def db_total():
 
 
 def test_off_funnel_names_the_gap_between_total_and_the_first_bar():
-    body = client.get("/analytics").text
+    body = client.get("/insights").text
     assert "not on the funnel at all" in body, (
         "a first bar smaller than the application count reads as a bug "
         "unless the difference is named")
@@ -376,7 +378,163 @@ def test_the_board_renders_a_migrated_row_without_raising():
     aware/naive datetime hazard, and this project has shipped that one before.
     """
     assert client.get("/board").status_code == 200
-    assert client.get("/analytics").status_code == 200
+    assert client.get("/insights").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# The merged page: chat drives the charts
+# --------------------------------------------------------------------------- #
+from app.routers import ui as ui_router  # noqa: E402
+
+SENT = {"system": None, "messages": None}
+REPLY = {"text": "Referrals look stronger."}
+
+
+def _fake_generate(system, messages, **kwargs):
+    SENT["system"] = system
+    SENT["messages"] = messages
+    if isinstance(REPLY["text"], Exception):
+        raise REPLY["text"]
+    out = kwargs.get("usage_out")
+    if out is not None:
+        out.update({"cache_read_input_tokens": 1234})
+    return REPLY["text"], "test-model"
+
+
+ui_router.llm.generate = _fake_generate
+os.environ["ANTHROPIC_API_KEY"] = "test-key-not-used"
+
+
+def _ask(question, query=""):
+    url = "/ui/insights/ask" + (("?" + query) if query else "")
+    resp = client.post(url, data={"question": question}, follow_redirects=False)
+    assert resp.status_code == 303, resp.text
+    return resp.headers["location"]
+
+
+def _clear_chat():
+    with SessionLocal() as db:
+        db.query(models.ChatMessage).delete()
+        db.commit()
+
+
+def test_old_urls_redirect_rather_than_404():
+    for old in ("/analytics", "/chat"):
+        resp = client.get(old, follow_redirects=False)
+        assert resp.status_code == 301, old
+        assert resp.headers["location"] == "/insights"
+
+
+def test_the_chat_receives_the_computed_figures_rather_than_deriving_them():
+    _clear_chat()
+    REPLY["text"] = "Fine."
+    _ask("how long to discovery?")
+    corpus = SENT["system"][1]["text"]
+    assert "PIPELINE ANALYTICS" in corpus
+    assert "quote these rather than calculating your own" in corpus
+    assert "Applied to Discovery" in corpus
+    assert "Funnel reach:" in corpus
+
+
+def test_a_proposed_view_becomes_a_url():
+    _clear_chat()
+    REPLY["text"] = ('Referrals look stronger.\n\n'
+                     '```view\n{"source": ["Referral"]}\n```')
+    location = _ask("compare referrals")
+    assert location.startswith("/insights?"), location
+    assert "source=Referral" in location
+    body = client.get(location).text
+    assert "source is Referral" in body, "the filter is drawn, not implied"
+    assert "Clear all" in body, "and is reversible without asking the model"
+
+
+def test_the_json_block_never_reaches_the_transcript():
+    _clear_chat()
+    REPLY["text"] = ('Here you go.\n\n```view\n{"source": ["Referral"]}\n```')
+    _ask("filter please")
+    with SessionLocal() as db:
+        answer = db.query(models.ChatMessage).filter_by(
+            role="assistant").order_by(models.ChatMessage.id.desc()).first()
+        assert answer.content == "Here you go."
+        assert "```" not in answer.content
+        assert answer.view_spec, "but what it did to the view is recorded"
+
+
+def test_a_hallucinated_value_is_rejected_and_reported():
+    _clear_chat()
+    REPLY["text"] = ('Sure.\n\n```view\n{"source": ["Carrier Pigeon"]}\n```')
+    location = _ask("filter to pigeons")
+    body = client.get(location).text
+    assert "wasn't applied" in body
+    assert "Carrier Pigeon" in body
+    assert "source is Carrier Pigeon" not in body, (
+        "a filter on a value no record carries returns an empty cohort, which "
+        "renders as 'not enough data' and looks like a finding")
+
+
+def test_an_invented_field_is_rejected():
+    _clear_chat()
+    REPLY["text"] = ('Sure.\n\n```view\n{"vibes": ["good"]}\n```')
+    body = client.get(_ask("filter by vibes")).text
+    # Rejection text arrives through `{{ }}`, so its apostrophe is escaped.
+    # Asserting on the escaped form would pin an implementation detail of the
+    # template engine; asserting on the part without one pins the message.
+    assert "a field on an application" in body
+
+
+def test_a_reply_with_no_block_leaves_the_view_alone():
+    _clear_chat()
+    REPLY["text"] = "Nothing is quiet right now."
+    assert _ask("anything quiet?") == "/insights"
+
+
+def test_a_new_view_replaces_rather_than_intersects_the_old_one():
+    _clear_chat()
+    REPLY["text"] = ('Ok.\n\n```view\n{"stage": ["Closed Lost"]}\n```')
+    location = _ask("show the losses", query="source=Referral")
+    assert "stage=Closed+Lost" in location or "stage=Closed%20Lost" in location
+    assert "source=" not in location, (
+        "silently intersecting two questions produces a cohort nobody asked "
+        "for, and the only way back is to notice and undo it by hand")
+
+
+def test_the_filter_survives_a_hand_typed_url_and_bad_values_do_not():
+    good = client.get("/insights?source=Referral")
+    assert good.status_code == 200 and "source is Referral" in good.text
+    bad = client.get("/insights?source=Nonsense")
+    assert bad.status_code == 200
+    assert "wasn't applied" in bad.text, (
+        "the URL is user-editable, so there is no privileged source of specs")
+
+
+def test_filtering_narrows_the_figures_and_says_so():
+    body = client.get("/insights?stage=Closed+Lost").text
+    assert "of {} applications".format(db_total()) in body, (
+        "a suddenly-small pipeline must read as a filter, not as data loss")
+
+
+def test_compare_by_renders_a_table_not_a_chart_per_group():
+    body = client.get("/insights?compare_by=source").text
+    assert "Compared by source" in body
+    assert "A table rather than one funnel per group" in body
+
+
+def test_the_reset_button_needs_no_model():
+    resp = client.post("/ui/insights/reset", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/insights"
+
+
+def test_the_live_filter_rides_the_question_not_the_cached_corpus():
+    _clear_chat()
+    REPLY["text"] = "Fine."
+    _ask("what am I looking at?", query="source=Referral")
+    corpus = SENT["system"][1]["text"]
+    question = SENT["messages"][-1]["content"]
+    assert "source is Referral" in question
+    assert "source is Referral" not in corpus, (
+        "the corpus is the cached half; making it track the filter would "
+        "rewrite the cache on every view change")
 
 
 if __name__ == "__main__":
