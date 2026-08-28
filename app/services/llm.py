@@ -34,6 +34,26 @@ DEFAULT_MODEL = os.getenv("BRIEF_MODEL", "claude-sonnet-5")
 # stays the shape that arrives.
 API_VERSION = "2023-06-01"
 
+# Sent as `anthropic-workspace-id` when set, and omitted entirely when not.
+#
+# Anthropic issues two shapes of key. A legacy *workspace* key carries its
+# workspace implicitly and needs nothing extra. A *personal* or *service
+# account* key is identity-linked, and if it can reach more than one workspace
+# the API refuses the request until you name which one -- with a 400 reading
+# "anthropic-workspace-id is required when authenticating with an
+# identity-linked API key".
+#
+# That is a property of the key, not of this app, and it can change under you
+# when a key is rotated: this feature worked for weeks and then stopped, with
+# no deploy in between, because a replacement key was a different type. So the
+# value is an env var rather than a code constant, and it is optional rather
+# than required -- setting it on a single-workspace key is harmless, and
+# leaving it unset on a legacy key is correct.
+#
+# Find it at Settings -> Workspaces in the Console; it also comes back on the
+# `anthropic-workspace-id` *response* header of any successful call.
+WORKSPACE_ID = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
+
 # A brief is two short sections. This ceiling exists to bound a runaway
 # response, not to shape the output -- the length instruction lives in the
 # prompt, where the model can actually act on it.
@@ -62,6 +82,24 @@ def enabled() -> bool:
 
 def model_name() -> str:
     return DEFAULT_MODEL
+
+
+def _headers() -> Dict[str, str]:
+    """The three required headers, plus the workspace when one is configured.
+
+    Read at call time rather than captured at import, so setting the variable
+    and restarting is enough -- and so a test can set it without reloading the
+    module.
+    """
+    headers = {
+        "x-api-key": _key(),
+        "anthropic-version": API_VERSION,
+        "content-type": "application/json",
+    }
+    workspace = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
+    if workspace:
+        headers["anthropic-workspace-id"] = workspace
+    return headers
 
 
 def generate(
@@ -103,11 +141,7 @@ def generate(
     try:
         resp = httpx.post(
             API_URL,
-            headers={
-                "x-api-key": _key(),
-                "anthropic-version": API_VERSION,
-                "content-type": "application/json",
-            },
+            headers=_headers(),
             json={
                 "model": DEFAULT_MODEL,
                 "max_tokens": max_tokens,

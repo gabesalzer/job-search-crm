@@ -24,6 +24,8 @@ services:
         sync: false                    # set this yourself in the dashboard (secret)
       - key: ANTHROPIC_API_KEY
         sync: false                    # secret; powers the Brief panel. Unset = panel off, app still fine
+      - key: ANTHROPIC_WORKSPACE_ID
+        sync: false                    # only needed for a personal/service-account key that can reach more than one workspace; harmless otherwise
       - key: BRIEF_MODEL
         value: claude-sonnet-5         # change here when this model ID is retired; no code change needed
       - key: PYTHON_VERSION

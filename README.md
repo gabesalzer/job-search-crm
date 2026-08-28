@@ -71,6 +71,15 @@ model other than the default. With no key, none of them render and the rest of
 the app is entirely unaffected — clone this repo without a key and you get a
 working CRM that never contacts anyone.
 
+If a model call comes back with **"anthropic-workspace-id is required when
+authenticating with an identity-linked API key"**, the key is a personal or
+service-account key that can reach more than one workspace, and the API wants
+to be told which. Set `ANTHROPIC_WORKSPACE_ID` alongside the key — find it at
+Settings → Workspaces in the Console. It is optional and harmless to leave
+unset: a legacy workspace key carries its workspace implicitly. This is a
+property of the key rather than of the app, so it can appear on a key rotation
+with no deploy in between.
+
 These are the only parts of the project that send your data anywhere. They
 differ in *when* they fire and in *how much* they send, which is the thing
 worth knowing before you turn them on:
