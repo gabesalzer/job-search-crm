@@ -46,9 +46,11 @@ VIEW_BLOCK = re.compile(r"```view\s*\n(.*?)\n?```", re.DOTALL)
 
 # Every filterable field, and how to check a proposed value. Anything not
 # listed here cannot be filtered on, however the model phrases it.
-TEXT_FIELDS = {"source", "lost_category", "stage", "resume", "company"}
+TEXT_FIELDS = {"source", "lost_category", "stage", "resume", "company",
+               "seniority", "speciality", "funding_stage", "employee_band"}
 DATE_FIELDS = {"since", "until"}
-COMPARE_FIELDS = {"source", "stage", "lost_category", "resume"}
+COMPARE_FIELDS = {"source", "stage", "lost_category", "resume",
+                  "seniority", "speciality", "funding_stage", "employee_band"}
 
 MAX_VALUES = 8          # a filter listing more than this is not a filter
 
@@ -347,10 +349,10 @@ to outbound", "just the ones since June", "what about the roles I lost on comp" 
 {"source": ["Referral"], "since": "2026-06-01"}
 ```
 
-Fields: source, stage, lost_category, resume, company (each a list of exact \
-values from the record), since and until (YYYY-MM-DD, matched against the \
-applied date), and compare_by (one of source, stage, lost_category, resume) to \
-break the figures out by group.
+Fields: source, stage, lost_category, resume, company, seniority, speciality, \
+funding_stage, employee_band (each a list of exact values from the record), \
+since and until (YYYY-MM-DD, matched against the applied date), and compare_by \
+(any of those first fields except company) to break the figures out by group.
 
 Rules:
 - Only emit the block when the question actually asks to change the view. A \

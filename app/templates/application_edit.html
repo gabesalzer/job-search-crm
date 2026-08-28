@@ -50,6 +50,29 @@
                placeholder="The specifics — who said what, and when">
       </div>
       <div class="field">
+        <label>Seniority</label>
+        <select name="seniority">
+          <option value="">—</option>
+          {% for v in seniority_values %}
+          <option value="{{ v }}" {% if app_obj.seniority and app_obj.seniority.value==v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+        <p>Read from the posting when you link one. Blank is a real answer — an
+          IC role is neither of these, and rounding it into one would quietly
+          corrupt any later comparison by seniority.</p>
+      </div>
+      <div class="field">
+        <label>Speciality</label>
+        <select name="speciality">
+          <option value="">—</option>
+          {% for v in speciality_values %}
+          <option value="{{ v }}" {% if app_obj.speciality and app_obj.speciality.value==v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+        <p>Tooling and infrastructure, planning and analysis, or genuinely both.
+          Typing here takes ownership; nothing overwrites it after that.</p>
+      </div>
+      <div class="field">
         <label>Resume</label>
         <select name="resume_id">
           <option value="">—</option>
@@ -142,6 +165,57 @@
         onsubmit="return confirm('Delete this application ({{ app_obj.title or 'Untitled role' }})? This also deletes its stage history and any meetings logged against it. This cannot be undone.');">
     <button type="submit" class="linkbtn danger">Delete this application</button>
   </form>
+</div>
+
+<div class="section">
+  <h2 style="font-size:1rem;margin:0 0 0.4rem">How this role is classified</h2>
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem;max-width:var(--w-prose)">
+    Seniority and Speciality above are read from the linked posting's job
+    description. This runs by itself when you link or change the posting — not
+    on every save — and it never touches values you set yourself.
+  </p>
+
+  {% if classify_result %}
+    <div style="background:var(--accent-soft);border:1px solid #dbe3fb;border-radius:var(--radius);
+                padding:0.5rem 0.7rem;margin-bottom:0.6rem">
+      <p style="font-size:0.82rem;margin:0"><strong>Classifier:</strong> {{ classify_result }}</p>
+    </div>
+  {% endif %}
+
+  <p style="font-size:0.78rem;color:var(--muted);margin:0 0 0.5rem;max-width:var(--w-prose);line-height:1.55">
+    {% if app_obj.classification_source == 'model' %}
+      {% if app_obj.seniority or app_obj.speciality %}
+        Read from the posting{% if app_obj.classified_at %} on {{ app_obj.classified_at.strftime('%Y-%m-%d') }}{% endif %}{% if app_obj.classification_model %}
+        by {{ app_obj.classification_model }}{% endif %}.
+        {% if app_obj.classification_note %}<br>{{ app_obj.classification_note }}{% endif %}
+        Change either dropdown to make it yours; nothing will overwrite it after that.
+      {% else %}
+        {# Read, and it declined both. Blank here means something different from
+           blank on a record nobody has classified, and the two must not look
+           the same — the same ambiguity fixed for email threads. #}
+        The posting was read{% if app_obj.classified_at %} on {{ app_obj.classified_at.strftime('%Y-%m-%d') }}{% endif %}
+        and could not be placed in either picklist, so both were left blank on
+        purpose — most often an individual-contributor role, which is neither
+        Director+ nor Manager.
+        {% if app_obj.classification_note %}<br>{{ app_obj.classification_note }}{% endif %}
+      {% endif %}
+    {% elif app_obj.seniority or app_obj.speciality %}
+      These are your values. The automatic classifier will not overwrite them.
+    {% elif not app_obj.job_posting %}
+      No posting is linked, so there is no job description to read. Link one
+      above and save, or classify from the title alone.
+    {% else %}
+      Not classified yet.
+    {% endif %}
+  </p>
+
+  {% if read_enabled %}
+    <form method="post" action="/ui/applications/{{ app_obj.id }}/classify" style="margin:0">
+      <button type="submit" class="linkbtn">
+        {% if app_obj.classification_source == 'model' %}Classify again{% else %}Classify from the posting{% endif %}
+      </button>
+    </form>
+  {% endif %}
 </div>
 
 <div class="section">

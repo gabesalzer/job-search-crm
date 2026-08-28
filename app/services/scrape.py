@@ -373,3 +373,71 @@ def _clean(s):
     if not s or not isinstance(s, str):
         return None
     return re.sub(r"\s+", " ", s).strip() or None
+
+
+# --------------------------------------------------------------------------- #
+# Generic page text, for company enrichment
+# --------------------------------------------------------------------------- #
+# `scrape_job` above is shaped entirely around job postings: it tries ATS APIs
+# first, looks for schema.org JobPosting, and sniffs salary out of prose. None
+# of that helps read a company's own homepage, so this is a separate, much
+# simpler door: fetch the page, return its readable text.
+
+# A homepage often says nothing useful while its about or careers page does, so
+# a small number of conventional paths are tried in turn. Kept short and
+# conventional on purpose -- each one is a fetch, and a long list would turn one
+# button press into a dozen Firecrawl credits.
+_COMPANY_SUBPAGES = ["", "/about", "/about-us", "/company", "/careers"]
+
+# Enough text to carry an about page, far short of what a marketing site can
+# weigh. The classifier caps again on its own side; this cap is about not
+# holding a 5MB string in memory per press.
+MAX_PAGE_CHARS = 60_000
+
+
+def scrape_page_text(url: str, *, try_subpages: bool = True) -> dict:
+    """Fetch ``url`` and return ``{"url": ..., "text": ...}``.
+
+    Returns the first page that yields a usable amount of text, and reports
+    **which** URL that was rather than the one it was asked for. That
+    distinction is the whole reason this returns a dict: a funding stage read
+    off `/about` should be recorded as having come from `/about`, because the
+    value is only as checkable as the page behind it.
+
+    Raises the underlying httpx error if nothing can be fetched at all. The
+    caller decides what a failure means; this function does not invent an empty
+    page, because "the site returned nothing" and "the site said nothing
+    useful" are different answers and only one of them is worth storing.
+    """
+    if not url or not url.strip():
+        raise ValueError("No website is recorded for this company.")
+    base = url.strip().rstrip("/")
+    if not re.match(r"^https?://", base, re.IGNORECASE):
+        base = "https://" + base
+
+    paths = _COMPANY_SUBPAGES if try_subpages else [""]
+    first_error: Optional[Exception] = None
+    best = {"url": base, "text": ""}
+
+    for path in paths:
+        candidate = base + path
+        try:
+            html = _fetch_html(candidate)
+        except Exception as exc:            # noqa: BLE001 - any fetch failure
+            first_error = first_error or exc
+            continue
+        text = _strip_html(html) or ""
+        text = text[:MAX_PAGE_CHARS]
+        # Keep the longest page seen, so a thin homepage loses to a real about
+        # page rather than winning by being first.
+        if len(text) > len(best["text"]):
+            best = {"url": candidate, "text": text}
+        # A page with real prose on it is enough; stop paying for more.
+        if len(text) > 1200:
+            break
+
+    if not best["text"].strip():
+        if first_error is not None:
+            raise first_error
+        raise ValueError("Fetched the site but found no readable text on it.")
+    return best

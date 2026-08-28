@@ -18,6 +18,24 @@
       </div>
       <div class="field"><label>Website</label><input name="website" value="{{ company.website or '' }}" placeholder="https://"></div>
       <div class="field"><label>Industry</label><input name="industry" value="{{ company.industry or '' }}"></div>
+      <div class="field">
+        <label>Funding stage</label>
+        <select name="funding_stage">
+          <option value="">—</option>
+          {% for v in funding_stages %}
+          <option value="{{ v }}" {% if company.funding_stage and company.funding_stage.value==v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Employees</label>
+        <select name="employee_band">
+          <option value="">—</option>
+          {% for v in employee_bands %}
+          <option value="{{ v }}" {% if company.employee_band and company.employee_band.value==v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
     <div class="field" style="margin-top:0.5rem">
       <label>Notes</label>
@@ -28,6 +46,62 @@
       <a class="btn secondary" href="/companies">Cancel</a>
     </div>
   </form>
+
+  {# --- Look it up ------------------------------------------------------- #}
+  {# A panel rather than a button beside the fields, because the provenance is
+     the point. These two values are the only derived fields in the app that
+     cannot be checked against anything already on the record, so the page has
+     to show which page they came from and when — a two-year-old "Series A"
+     should read as two years old, not as current. #}
+  <div style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)">
+    {% if lookup_result %}
+      <p style="font-size:var(--fs-sm);margin:0 0 var(--s-3);color:var(--muted)">
+        <strong style="color:var(--ink)">Lookup:</strong> {{ lookup_result }}
+      </p>
+    {% endif %}
+
+    {% if company.enrichment_source == 'model' %}
+      <p style="font-size:var(--fs-xs);color:var(--muted);margin:0 0 var(--s-2);
+                max-width:var(--w-prose);line-height:1.55">
+        {% if company.funding_stage or company.employee_band %}
+          Read automatically from
+          <a href="{{ company.enrichment_url }}" target="_blank" rel="noopener">{{ company.enrichment_url }}</a>{% if company.enriched_at %}
+          on {{ company.enriched_at.strftime('%Y-%m-%d') }}{% endif %}.
+          {% if company.enrichment_note %}<br>{{ company.enrichment_note }}{% endif %}
+          These describe the site as it read that day, not as it is now — edit
+          either field to make it yours and drop the citation.
+        {% else %}
+          Looked at
+          <a href="{{ company.enrichment_url }}" target="_blank" rel="noopener">{{ company.enrichment_url }}</a>{% if company.enriched_at %}
+          on {{ company.enriched_at.strftime('%Y-%m-%d') }}{% endif %}
+          and found nothing it states about funding or headcount, so both were
+          left blank on purpose.
+          {% if company.enrichment_note %}<br>{{ company.enrichment_note }}{% endif %}
+        {% endif %}
+      </p>
+    {% elif company.funding_stage or company.employee_band %}
+      <p style="font-size:var(--fs-xs);color:var(--muted);margin:0 0 var(--s-2)">
+        These are your values. A lookup will not overwrite them.
+      </p>
+    {% endif %}
+
+    {% if lookup_enabled %}
+      <form method="post" action="/ui/companies/{{ company.id }}/enrich" style="margin:0">
+        <button type="submit" class="linkbtn"
+                {% if not company.website %}disabled title="Add a website above and save first"{% endif %}>
+          {% if company.enrichment_source == 'model' %}Look it up again{% else %}Look up funding and headcount{% endif %}
+        </button>
+      </form>
+      <p style="font-size:var(--fs-2xs);color:var(--neutral);margin:var(--s-1) 0 0;
+                max-width:var(--w-prose);line-height:1.5">
+        Fetches the company's own site and reports only what the page actually
+        states. It will leave a field blank rather than fill it from what a
+        model remembers — a recalled funding round is often stale and there is
+        nothing here to check it against.
+      </p>
+    {% endif %}
+  </div>
+
   <form method="post" action="/ui/companies/{{ company.id }}/delete" style="margin-top:1.1rem;padding-top:0.9rem;border-top:1px solid var(--line)"
         onsubmit="return confirm('Delete {{ company.name }}? This also deletes its {{ company.postings|length }} posting(s), {{ company.applications|length }} application(s), and {{ company.people|length }} contact(s). This cannot be undone.');">
     <button type="submit" class="linkbtn danger">Delete this company</button>

@@ -211,6 +211,65 @@ class LostCategory(str, enum.Enum):
     OTHER = "Other"
 
 
+class Seniority(str, enum.Enum):
+    """How senior the role is, read off the job description.
+
+    Two values only, because these are the two Gabe is actually choosing
+    between. A posting that is neither -- an analyst, an individual contributor
+    -- gets NULL rather than being rounded into Manager. That is the same
+    blank-is-not-zero rule the scores follow, and it matters more here than it
+    looks: the whole point of a classification field is comparing groups later,
+    and a category padded with roles that do not belong in it produces a
+    comparison that is confidently wrong rather than visibly thin.
+    """
+
+    DIRECTOR_PLUS = "Director+"
+    MANAGER = "Manager"
+
+
+class Speciality(str, enum.Enum):
+    """Which half of the RevOps job the posting is really asking for."""
+
+    SYSTEMS = "Systems"
+    STRATEGY = "Strategy"
+    SYSTEMS_AND_STRATEGY = "Systems + Strategy"
+
+
+class FundingStage(str, enum.Enum):
+    """Where the company is in its funding life, as its own site describes it.
+
+    Not derived from anything in this database, which is why every value
+    carries a URL and a date -- see Company's enrichment columns.
+    """
+
+    BOOTSTRAPPED = "Bootstrapped"
+    PRE_SEED = "Pre-Seed"
+    SEED = "Seed"
+    SERIES_A = "Series A"
+    SERIES_B = "Series B"
+    SERIES_C = "Series C"
+    SERIES_D_PLUS = "Series D+"
+    PUBLIC = "Public"
+    ACQUIRED = "Acquired"
+
+
+class EmployeeBand(str, enum.Enum):
+    """Headcount as a band rather than a number, deliberately.
+
+    A band is what company sites and directories actually publish, and it is
+    the form that survives being six months out of date. An exact scraped
+    headcount reads far more authoritative than it deserves: "212 employees" a
+    year old is wrong in a way "201-500" is not.
+    """
+
+    B_1_10 = "1-10"
+    B_11_50 = "11-50"
+    B_51_200 = "51-200"
+    B_201_500 = "201-500"
+    B_501_1000 = "501-1000"
+    B_1000_PLUS = "1000+"
+
+
 class PersonRole(str, enum.Enum):
     RECRUITER = "Recruiter"
     HIRING_MANAGER = "Hiring Manager"
@@ -277,6 +336,29 @@ class Company(Base):
     website = Column(String(512))
     industry = Column(String(255))
     notes = Column(Text)
+
+    # --- Read off the company's own website ------------------------------- #
+    #
+    # These differ in kind from every other derived field in this app, and the
+    # extra columns are why. Everything else is computed from data the database
+    # already holds, so it can be checked against its own source and cannot go
+    # stale on its own. These are claims about the outside world: true on a
+    # date, read off a page that may since have changed, and unverifiable from
+    # anything stored here.
+    #
+    # So a value is meaningless without its provenance. `enrichment_url` records
+    # which page it came from and `enriched_at` when -- together they are what
+    # let a two-year-old "Series A" read as two years old rather than as
+    # current. The classifier is forbidden from filling these from what a model
+    # remembers; only text actually fetched from that URL may produce a value.
+    funding_stage = Column(Enum(FundingStage))
+    employee_band = Column(Enum(EmployeeBand))
+
+    enrichment_source = Column(String(16))   # NULL = you, "model" = a lookup
+    enrichment_note = Column(Text)           # what on the page it read
+    enrichment_url = Column(String(1024))    # the page it actually fetched
+    enriched_at = Column(DateTime)
+    enrichment_model = Column(String(64))
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -445,6 +527,32 @@ class JobApplication(Base):
     # apart from "never asked" -- exactly the distinction this column exists to
     # preserve.
     champion = Column(Boolean)  # True / False / None -- see above
+
+    # --- Derived from the job description -------------------------------- #
+    #
+    # These live on the Application rather than on JobPosting, which is where
+    # the JD itself lives, and that was Gabe's call. It is defensible: the
+    # classification is a property of *the role as you are pursuing it*, so a
+    # hand-correction belongs to the pursuit, and an application created
+    # without a linked posting can still be classified from its title. The cost
+    # is that two applications to the same posting classify independently,
+    # which at this pipeline's size never happens.
+    #
+    # NULL is a first-class answer on both. An individual-contributor posting
+    # is neither Director+ nor Manager, and the classifier is instructed to
+    # decline rather than round it into the nearer value -- see the Seniority
+    # docstring for why a padded category is worse than an empty one.
+    seniority = Column(Enum(Seniority))
+    speciality = Column(Enum(Speciality))
+
+    # Provenance, exactly mirroring EmailThread's rating_source pattern and for
+    # the same reason: once a machine can write a field, a value with no
+    # attribution is unrecoverable. NULL = you typed it, "model" = classified.
+    # A human value is never overwritten by a later classification.
+    classification_source = Column(String(16))
+    classification_note = Column(Text)      # the model's one-line justification
+    classified_at = Column(DateTime)
+    classification_model = Column(String(64))
 
     # Standing context on the opportunity itself: why this role is worth
     # pursuing, what you know about the team/comp/timeline, what would make you

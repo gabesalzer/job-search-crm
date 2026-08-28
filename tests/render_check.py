@@ -27,6 +27,11 @@ def enum(value):
 company = SimpleNamespace(
     id=1, name="Plaid", company_type=enum("Employer"), website="https://plaid.com",
     industry="Fintech", notes="Great culture", applications=[], postings=[], people=[],
+    # Web-derived, so they arrive with a citation. NULL provenance everywhere is
+    # what every row predating the columns carries.
+    funding_stage=None, employee_band=None, enrichment_source=None,
+    enrichment_note=None, enrichment_url=None, enriched_at=None,
+    enrichment_model=None,
 )
 
 posting = SimpleNamespace(
@@ -42,7 +47,10 @@ resume = SimpleNamespace(
 
 app_obj = SimpleNamespace(
     id=4, title="Sr. Operations Manager", company_id=1, company=company, stage=enum("Applied"),
-    lost_reason=None, lost_category=None, resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
+    lost_reason=None, lost_category=None,
+    seniority=None, speciality=None, classification_source=None,
+    classification_note=None, classified_at=None, classification_model=None,
+    resume_id=3, resume=resume, job_posting_id=2, job_posting=posting,
     applied_date=datetime(2026, 7, 1, 10, 0), notes="Referred by Jane", meetings=[],
     created_at=datetime(2026, 6, 28, 9, 0), updated_at=datetime(2026, 7, 12, 16, 30),
     last_activity_date=datetime(2026, 7, 10, 15, 0),
@@ -257,6 +265,29 @@ analytics_thin = analytics_model.overview([
      "stage_history": []},
 ], ANALYTICS_STAGES)
 
+# Read from the real module so the template is smoke-tested against the exact
+# vocabulary the app offers, not a transcription of it.
+from app import classify as classify_model  # noqa: E402
+
+FUNDING_STAGES_FIXTURE = classify_model.FUNDING_STAGES
+EMPLOYEE_BANDS_FIXTURE = classify_model.EMPLOYEE_BANDS
+SENIORITY_FIXTURE = classify_model.SENIORITY_VALUES
+SPECIALITY_FIXTURE = classify_model.SPECIALITY_VALUES
+
+APP_EDIT_BASE = {
+    "active": "board", "stages": ["Saved", "Applied", "Closed Lost"],
+    "lost_categories": ["Compensation gap", "Other"],
+    "companies": [company], "resumes": [resume], "postings": [posting],
+    "activity": activity, "sources": ["Referral", "Recruiter Inbound", "Outbound"],
+    "activity_age": 3, "forecast": forecast, "forecast_values": FORECAST_VALUES,
+    "forecast_weights": FORECAST_WEIGHTS,
+    "read_result": "", "read_enabled": True, "unread_threads": 0,
+    "declined_threads": 0, "brief": brief_empty, "brief_error": "",
+    "classify_result": "",
+    "seniority_values": SENIORITY_FIXTURE,
+    "speciality_values": SPECIALITY_FIXTURE,
+}
+
 INSIGHTS_BASE = {
     "active": "insights", "stage_order": ANALYTICS_STAGES,
     "chips": [], "rejected": [], "filtered": False, "compare_by": None,
@@ -266,7 +297,11 @@ INSIGHTS_BASE = {
 }
 
 cases = [
-    ("company_edit.html", {"active": "companies", "company": company, "company_types": ["Employer", "Agency", "Both"]}),
+    ("company_edit.html", {"active": "companies", "company": company,
+                          "company_types": ["Employer", "Agency", "Both"],
+                          "funding_stages": FUNDING_STAGES_FIXTURE,
+                          "employee_bands": EMPLOYEE_BANDS_FIXTURE,
+                          "lookup_result": "", "lookup_enabled": True}),
     ("posting_edit.html", {"active": "postings", "posting": posting}),
     ("resume_edit.html", {"active": "resumes", "resume": resume}),
     ("application_edit.html", {
@@ -277,7 +312,9 @@ cases = [
         "activity_age": 3,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
-        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
+        "read_result": "", "read_enabled": True, "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_written, "brief_error": "",
     }),
     # Nothing rated yet, and no activity at all, so the age is None and the
@@ -295,7 +332,9 @@ cases = [
         "activity_age": None, "forecast": forecast_blank,
         "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
-        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
+        "read_result": "", "read_enabled": True, "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_empty, "brief_error": "",
     }),
     # Every date null. This is the case the Dates block exists for: the fields
@@ -320,7 +359,9 @@ cases = [
         "activity_age": 0,
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
-        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
+        "read_result": "", "read_enabled": True, "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         # Same migration story as manual_forecast above: brief, brief_model and
         # brief_generated_at are all NULL on every row predating the column,
         # which is every application currently in the Render database.
@@ -336,7 +377,9 @@ cases = [
         "activity_age": 41,
         "forecast": forecast_no_champion, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
-        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
+        "read_result": "", "read_enabled": True, "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_stale, "brief_error": "",
     }),
     # A record whose forecast reads high off setup facts alone. The number
@@ -349,7 +392,9 @@ cases = [
         "activity_age": None,
         "forecast": forecast_thin, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
-        "read_result": "", "read_enabled": True, "unread_threads": 0, "declined_threads": 0,
+        "read_result": "", "read_enabled": True, "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_off, "brief_error": "API returned 401: invalid x-api-key",
     }),
     # Meetings and threads are on the record, none of them rated. The panel has
@@ -368,6 +413,9 @@ cases = [
         # zero, which looks exactly like the button not working.
         "read_result": "rated 2 threads; found no signal in 1 (left blank on purpose, "
                        "which keeps email out of the score rather than dragging it down)",
+        "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"],
         "read_enabled": True, "unread_threads": 3, "declined_threads": 0,
         "brief": brief_off, "brief_error": "",
     }),
@@ -383,7 +431,9 @@ cases = [
         "activity_age": 3,
         "forecast": forecast_unrated, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
-        "read_result": "", "read_enabled": True,
+        "read_result": "", "read_enabled": True, "classify_result": "",
+        "seniority_values": ["Director+", "Manager"],
+        "speciality_values": ["Systems", "Strategy", "Systems + Strategy"],
         "unread_threads": 0, "declined_threads": 2,
         "brief": brief_off, "brief_error": "",
     }),
@@ -588,6 +638,104 @@ cases = [
         }),
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
+    }),
+    # --- Classification and enrichment states ------------------------------
+    # The panel's four branches. Three are states a happy-path check never
+    # reaches, and two of them ("read it and declined" vs "nobody has looked")
+    # render identical fields — the exact ambiguity fixed once for email
+    # threads and re-created here by a second feature that can decline.
+    ("application_edit.html (classified automatically)", {
+        **APP_EDIT_BASE,
+        "app_obj": SimpleNamespace(**{
+            **app_obj.__dict__,
+            "seniority": enum("Director+"), "speciality": enum("Systems + Strategy"),
+            "classification_source": "model",
+            "classification_note": "Owns the function and names both tooling and territory design.",
+            "classified_at": datetime(2026, 8, 14, 9, 0),
+            "classification_model": "claude-sonnet-5",
+        }),
+        "classify_result": "read the posting as Director+ / Systems + Strategy",
+    }),
+    # Read, and it declined both — most often an IC role, which is neither
+    # value. Both fields blank, but for a recorded reason.
+    ("application_edit.html (classified, declined both)", {
+        **APP_EDIT_BASE,
+        "app_obj": SimpleNamespace(**{
+            **app_obj.__dict__,
+            "seniority": None, "speciality": None,
+            "classification_source": "model",
+            "classification_note": "Reads as an individual-contributor analyst role.",
+            "classified_at": datetime(2026, 8, 14, 9, 0),
+            "classification_model": "claude-sonnet-5",
+        }),
+    }),
+    # Values you typed. Must say so, because the automatic pass will not
+    # overwrite them and the page has to explain why nothing changes.
+    ("application_edit.html (classified by hand)", {
+        **APP_EDIT_BASE,
+        "app_obj": SimpleNamespace(**{
+            **app_obj.__dict__,
+            "seniority": enum("Manager"), "speciality": enum("Strategy"),
+            "classification_source": None, "classification_note": None,
+            "classified_at": None, "classification_model": None,
+        }),
+    }),
+    # No posting linked, so there is no description to read.
+    ("application_edit.html (nothing to classify)", {
+        **APP_EDIT_BASE,
+        "app_obj": SimpleNamespace(**{
+            **app_obj.__dict__, "job_posting": None, "job_posting_id": None,
+        }),
+    }),
+    ("company_edit.html (looked up)", {
+        "active": "companies", "company_types": ["Employer"],
+        "funding_stages": FUNDING_STAGES_FIXTURE,
+        "employee_bands": EMPLOYEE_BANDS_FIXTURE,
+        "lookup_result": "read Series B and 51-200 employees from https://plaid.com/about",
+        "lookup_enabled": True,
+        "company": SimpleNamespace(**{
+            **company.__dict__,
+            "funding_stage": enum("Series B"), "employee_band": enum("51-200"),
+            "enrichment_source": "model",
+            "enrichment_note": "About page says 'since our Series B' and 'a team of 60'.",
+            "enrichment_url": "https://plaid.com/about",
+            "enriched_at": datetime(2026, 8, 14, 9, 0),
+            "enrichment_model": "claude-sonnet-5",
+        }),
+    }),
+    # Fetched the page and it said nothing. Both fields blank *on purpose* —
+    # which looks exactly like the button not working unless the panel says so.
+    ("company_edit.html (looked, site says nothing)", {
+        "active": "companies", "company_types": ["Employer"],
+        "funding_stages": FUNDING_STAGES_FIXTURE,
+        "employee_bands": EMPLOYEE_BANDS_FIXTURE,
+        "lookup_result": "read https://plaid.com and found nothing it states "
+                         "about funding or headcount (left blank rather than guessed)",
+        "lookup_enabled": True,
+        "company": SimpleNamespace(**{
+            **company.__dict__,
+            "funding_stage": None, "employee_band": None,
+            "enrichment_source": "model",
+            "enrichment_note": "Marketing homepage with no company facts on it.",
+            "enrichment_url": "https://plaid.com",
+            "enriched_at": datetime(2026, 8, 14, 9, 0),
+            "enrichment_model": "claude-sonnet-5",
+        }),
+    }),
+    # No website recorded: the button has to disable rather than fail on press.
+    ("company_edit.html (no website)", {
+        "active": "companies", "company_types": ["Employer"],
+        "funding_stages": FUNDING_STAGES_FIXTURE,
+        "employee_bands": EMPLOYEE_BANDS_FIXTURE,
+        "lookup_result": "", "lookup_enabled": True,
+        "company": SimpleNamespace(**{**company.__dict__, "website": None}),
+    }),
+    # No key at all — what anyone cloning the public repo sees.
+    ("company_edit.html (lookups disabled)", {
+        "active": "companies", "company_types": ["Employer"],
+        "funding_stages": FUNDING_STAGES_FIXTURE,
+        "employee_bands": EMPLOYEE_BANDS_FIXTURE,
+        "lookup_result": "", "lookup_enabled": False, "company": company,
     }),
     # --- Insights (analytics + chat, merged) -------------------------------
     # Fixtures come from the real modules rather than hand-written literals,

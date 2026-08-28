@@ -21,12 +21,13 @@ from sqlalchemy.orm import Session, selectinload
 from .. import analytics as analytics_model
 from .. import brief as brief_model
 from .. import chat as chat_model
+from .. import classify
 from .. import forecast as forecast_model
 from .. import models
 from .. import thread_read
 from .. import viewspec
 from ..database import get_db
-from ..services import granola, llm
+from ..services import granola, llm, scrape
 from ..services.email_parse import parse_gmail_export
 from ..services.resume_extract import extract_text
 
@@ -46,6 +47,10 @@ LOST_CATEGORY_VALUES = [c.value for c in models.LostCategory]
 PERSON_ROLE_VALUES = [r.value for r in models.PersonRole]
 APPLICATION_SOURCE_VALUES = [s.value for s in models.ApplicationSource]
 FORECAST_VALUES = [f.value for f in models.ForecastCategory]
+SENIORITY_VALUES = [v.value for v in models.Seniority]
+SPECIALITY_VALUES = [v.value for v in models.Speciality]
+FUNDING_STAGE_VALUES = [v.value for v in models.FundingStage]
+EMPLOYEE_BAND_VALUES = [v.value for v in models.EmployeeBand]
 
 # The forecast's component budgets, read straight off the model so the
 # breakdown panel can print "12.0/25" without the denominators being retyped
@@ -274,6 +279,147 @@ def _read_thread_now(thread) -> Optional[str]:
     # flattens it before anything compares it against a form-entered date.
     thread.rated_at = datetime.now(timezone.utc)
     thread.rating_model = model_used
+    return None
+
+
+def _has_human_classification(app_obj) -> bool:
+    """True when either classification was typed rather than derived."""
+    return (app_obj.classification_source is None
+            and (app_obj.seniority is not None or app_obj.speciality is not None))
+
+
+def _hand_edit_claims_the_classification(app_obj, before_sen, before_spec) -> bool:
+    """Take ownership of the classification when the submitted values differ.
+
+    Exact mirror of `_hand_edit_claims_the_rating`, and it exists for the same
+    bug: without it, clearing a value while also changing the linked posting
+    would put the model's answer straight back on the next save. Returning
+    whether it claimed lets the caller skip the automatic classification on
+    that same request.
+    """
+    if (app_obj.seniority, app_obj.speciality) == (before_sen, before_spec):
+        return False
+    app_obj.classification_source = None
+    app_obj.classification_note = None
+    app_obj.classification_model = None
+    app_obj.classified_at = None
+    return True
+
+
+def _classify_application_now(app_obj) -> Optional[str]:
+    """Classify one application from its job description. Returns an error.
+
+    None on success, a readable string otherwise, and nothing is written on
+    failure. Same contract and the same broad `except` as `_read_thread_now`:
+    this can fire during a save, and an exception escaping here would roll back
+    the whole edit rather than just losing a classification.
+    """
+    if not llm.enabled():
+        return "Automatic classification is off — no ANTHROPIC_API_KEY is set."
+    if _has_human_classification(app_obj):
+        return ("You have already classified this one; an automatic read "
+                "would not overwrite it.")
+
+    posting = app_obj.job_posting
+    jd = (posting.jd_text if posting else None) or ""
+    # A title alone is thin but not nothing -- "VP, Revenue Operations" is a
+    # legitimate Director+ read. What is genuinely unclassifiable is a record
+    # with neither, and that refuses rather than guessing.
+    if not jd.strip() and not (app_obj.title or "").strip():
+        return ("There is no job description or title here to classify. Link a "
+                "posting, or type a title.")
+
+    packet = classify.build_posting_packet(
+        title=app_obj.title or (posting.title if posting else None),
+        company=app_obj.company.name if app_obj.company else None,
+        location=posting.location if posting else None,
+        jd_text=jd,
+    )
+    try:
+        text, model_used = llm.generate(
+            classify.posting_system_prompt(),
+            classify.build_posting_messages(packet),
+            max_tokens=classify.MAX_TOKENS,
+            timeout=60,
+        )
+    except llm.LLMError as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001 -- see _read_thread_now
+        return "The classification failed unexpectedly: {}".format(exc)
+
+    seniority, speciality, note, understood = classify.parse_posting_reply(text)
+    if not understood:
+        return "The model's reply could not be read as a classification."
+
+    app_obj.seniority = models.Seniority(seniority) if seniority else None
+    app_obj.speciality = models.Speciality(speciality) if speciality else None
+    app_obj.classification_note = note
+    app_obj.classification_source = "model"
+    app_obj.classified_at = datetime.now(timezone.utc)
+    app_obj.classification_model = model_used
+    return None
+
+
+def _has_human_enrichment(company) -> bool:
+    return (company.enrichment_source is None
+            and (company.funding_stage is not None
+                 or company.employee_band is not None))
+
+
+def _enrich_company_now(company) -> Optional[str]:
+    """Read funding stage and headcount off the company's own website.
+
+    Never fires on its own. It costs a Firecrawl fetch and an API call per
+    press, and — more to the point — it is the only feature in this app whose
+    output cannot be checked against anything already on the record. A step
+    that needs that much judgment gets a button.
+
+    Only text actually fetched from the site can produce a value here. The
+    prompt forbids answering from what the model remembers, because a recalled
+    funding round is frequently stale, cannot be cited, and would be stored
+    beside a URL it did not come from.
+    """
+    if not llm.enabled():
+        return "Lookups are off — no ANTHROPIC_API_KEY is set."
+    if not (company.website or "").strip():
+        return ("No website is recorded for this company, so there is nothing "
+                "to read. Add one above and save first.")
+    if _has_human_enrichment(company):
+        return ("You have already filled these in; a lookup would not "
+                "overwrite your values.")
+
+    try:
+        page = scrape.scrape_page_text(company.website)
+    except Exception as exc:  # noqa: BLE001 -- any fetch failure, incl. httpx
+        return "Couldn't fetch the site: {}".format(exc)
+
+    packet = classify.build_company_packet(
+        name=company.name, url=page["url"], page_text=page["text"])
+    try:
+        text, model_used = llm.generate(
+            classify.company_system_prompt(),
+            classify.build_company_messages(packet),
+            max_tokens=classify.MAX_TOKENS,
+            timeout=60,
+        )
+    except llm.LLMError as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return "The lookup failed unexpectedly: {}".format(exc)
+
+    stage, band, note, understood = classify.parse_company_reply(text)
+    if not understood:
+        return "The model's reply could not be read as a lookup result."
+
+    company.funding_stage = models.FundingStage(stage) if stage else None
+    company.employee_band = models.EmployeeBand(band) if band else None
+    company.enrichment_note = note
+    company.enrichment_source = "model"
+    # The page it actually read, which may be /about rather than the homepage.
+    # A value is only as checkable as the page behind it.
+    company.enrichment_url = page["url"]
+    company.enriched_at = datetime.now(timezone.utc)
+    company.enrichment_model = model_used
     return None
 
 
@@ -632,12 +778,17 @@ def edit_application_page(
     # confusing outcome -- a thread the model declined to score leaves the
     # Email component at zero, which looks identical to the button not working.
     read_result: str = "",
+    # Same mechanism again for the classification button.
+    classify_result: str = "",
     db: Session = Depends(get_db),
 ):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
     return templates.TemplateResponse(request, "application_edit.html", {
         "read_result": read_result,
         "read_enabled": llm.enabled(),
+        "classify_result": classify_result,
+        "seniority_values": SENIORITY_VALUES,
+        "speciality_values": SPECIALITY_VALUES,
         # How many linked threads a read would actually touch. Drives whether
         # the button renders at all, so it can never appear on an application
         # where pressing it would do nothing.
@@ -824,13 +975,22 @@ def update_application_ui(
     source: str = Form(""),
     manual_forecast: str = Form(""),
     champion: str = Form(""),
+    seniority: str = Form(""),
+    speciality: str = Form(""),
     db: Session = Depends(get_db),
 ):
     app_obj = _get_or_404(db, models.JobApplication, application_id)
+    # Captured before anything is assigned, so the automatic classification
+    # below can tell a posting change from an ordinary save.
+    posting_before = app_obj.job_posting_id
+    class_before = (app_obj.seniority, app_obj.speciality)
+
     app_obj.company_id = company_id
     app_obj.title = title or None
     app_obj.resume_id = int(resume_id) if resume_id else None
     app_obj.job_posting_id = int(job_posting_id) if job_posting_id else None
+    app_obj.seniority = models.Seniority(seniority) if seniority else None
+    app_obj.speciality = models.Speciality(speciality) if speciality else None
     app_obj.applied_date = _parse_dt(applied_date)
     app_obj.notes = notes or None
     app_obj.context = context or None
@@ -899,8 +1059,53 @@ def update_application_ui(
     if new_updated and not _same_to_the_minute(new_updated, app_obj.updated_at):
         app_obj.updated_at = new_updated
 
+    # --- Automatic classification ----------------------------------------- #
+    # Fires only when the *linked posting changed*, which is the moment new job
+    # description text arrives and the old classification stops describing it.
+    # Deliberately not on every save: editing a note or fixing a date must not
+    # cost an API call, and the previous answer is still a correct answer to a
+    # JD nobody touched. Same guard shape as the thread read, which fires on a
+    # body change rather than on any save.
+    #
+    # And never on a request where you set the values yourself. Without that,
+    # clearing a field while also relinking the posting would put the model's
+    # answer straight back -- the exact bug found in the thread read.
+    claimed = _hand_edit_claims_the_classification(app_obj, *class_before)
+    if not claimed and app_obj.job_posting_id != posting_before:
+        _classify_application_now(app_obj)
+
     db.commit()
     return RedirectResponse(url="/board", status_code=303)
+
+
+@router.post("/ui/applications/{application_id}/classify")
+def classify_application_ui(application_id: int, db: Session = Depends(get_db)):
+    """Classify now, on request, for a record the automatic pass skipped.
+
+    The automatic pass only fires when the linked posting changes, so an
+    application that predates the feature, or one whose posting was linked
+    before it existed, needs a way to ask. Also the way to re-run one after
+    clearing a hand-entered value.
+    """
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    error = _classify_application_now(app_obj)
+    if error:
+        db.rollback()
+        message = error
+    else:
+        db.commit()
+        parts = []
+        if app_obj.seniority:
+            parts.append(app_obj.seniority.value)
+        if app_obj.speciality:
+            parts.append(app_obj.speciality.value)
+        message = ("read the posting as {}".format(" / ".join(parts)) if parts
+                   else "read the posting and could not place it in either "
+                        "picklist (left blank rather than guessed)")
+    return RedirectResponse(
+        url="/applications/{}/edit?classify_result={}".format(
+            application_id, quote(message)),
+        status_code=303)
 
 
 @router.post("/ui/applications/{application_id}/delete")
@@ -1191,13 +1396,53 @@ def create_company_ui(
 
 
 @router.get("/companies/{company_id}/edit")
-def edit_company_page(company_id: int, request: Request, db: Session = Depends(get_db)):
+def edit_company_page(company_id: int, request: Request,
+                      lookup_result: str = "", db: Session = Depends(get_db)):
     company = _get_or_404(db, models.Company, company_id)
     return templates.TemplateResponse(request, "company_edit.html", {
         "active": "companies",
         "company": company,
         "company_types": COMPANY_TYPES,
+        "funding_stages": FUNDING_STAGE_VALUES,
+        "employee_bands": EMPLOYEE_BAND_VALUES,
+        # Reports what a press did even on success, because "the site does not
+        # say" is a legitimate outcome that leaves both fields blank -- which
+        # looks exactly like the button not working.
+        "lookup_result": lookup_result,
+        "lookup_enabled": llm.enabled(),
     })
+
+
+@router.post("/ui/companies/{company_id}/enrich")
+def enrich_company_ui(company_id: int, db: Session = Depends(get_db)):
+    """Read funding stage and headcount off the company's own site.
+
+    A button, never automatic: it costs a fetch and an API call, and it is the
+    one derived field in this app that cannot be checked against anything
+    already on the record.
+    """
+    company = _get_or_404(db, models.Company, company_id)
+    error = _enrich_company_now(company)
+    if error:
+        db.rollback()
+        return RedirectResponse(
+            url="/companies/{}/edit?lookup_result={}".format(
+                company_id, quote(error)),
+            status_code=303)
+    db.commit()
+
+    found = []
+    if company.funding_stage:
+        found.append(company.funding_stage.value)
+    if company.employee_band:
+        found.append("{} employees".format(company.employee_band.value))
+    message = ("read {} from {}".format(" and ".join(found), company.enrichment_url)
+               if found else
+               "read {} and found nothing it states about funding or headcount "
+               "(left blank rather than guessed)".format(company.enrichment_url))
+    return RedirectResponse(
+        url="/companies/{}/edit?lookup_result={}".format(company_id, quote(message)),
+        status_code=303)
 
 
 @router.post("/ui/companies/{company_id}/edit")
@@ -1208,14 +1453,34 @@ def update_company_ui(
     website: str = Form(""),
     industry: str = Form(""),
     notes: str = Form(""),
+    funding_stage: str = Form(""),
+    employee_band: str = Form(""),
     db: Session = Depends(get_db),
 ):
     company = _get_or_404(db, models.Company, company_id)
+    before = (company.funding_stage, company.employee_band)
+
     company.name = name
     company.company_type = models.CompanyType(company_type)
     company.website = website or None
     company.industry = industry or None
     company.notes = notes or None
+    company.funding_stage = (
+        models.FundingStage(funding_stage) if funding_stage else None)
+    company.employee_band = (
+        models.EmployeeBand(employee_band) if employee_band else None)
+
+    # Typing in either field takes ownership of both, and drops the machine's
+    # note, model and source URL along with it. Same rule as every other
+    # provenance pair in this app: a value you set is never overwritten, and it
+    # must not go on carrying a citation that no longer describes it.
+    if (company.funding_stage, company.employee_band) != before:
+        company.enrichment_source = None
+        company.enrichment_note = None
+        company.enrichment_url = None
+        company.enrichment_model = None
+        company.enriched_at = None
+
     db.commit()
     return RedirectResponse(url="/companies", status_code=303)
 
@@ -1884,6 +2149,12 @@ def _chat_corpus(db: Session, analytics: Optional[dict] = None) -> str:
             "applied_date": _naive_utc(a.applied_date),
             "champion": a.champion,
             "manual_forecast": a.manual_forecast.value if a.manual_forecast else None,
+            "seniority": a.seniority.value if a.seniority else None,
+            "speciality": a.speciality.value if a.speciality else None,
+            "funding_stage": (a.company.funding_stage.value
+                              if a.company and a.company.funding_stage else None),
+            "employee_band": (a.company.employee_band.value
+                              if a.company and a.company.employee_band else None),
             "lost_reason": a.lost_reason,
             "lost_category": a.lost_category.value if a.lost_category else None,
             "context": a.context,
@@ -2016,6 +2287,12 @@ def _analytics_apps(db: Session) -> List[dict]:
             "created_at": _naive_utc(a.created_at),
             "lost_category": a.lost_category.value if a.lost_category else None,
             "lost_reason": a.lost_reason,
+            "seniority": a.seniority.value if a.seniority else None,
+            "speciality": a.speciality.value if a.speciality else None,
+            "funding_stage": (a.company.funding_stage.value
+                              if a.company and a.company.funding_stage else None),
+            "employee_band": (a.company.employee_band.value
+                              if a.company and a.company.employee_band else None),
             # Carried so the view can be filtered or compared by resume --
             # "does v3 actually get further than v2" is one of the few
             # questions this dataset can answer that the board cannot.
@@ -2055,6 +2332,10 @@ def _vocabulary(apps: List[dict]) -> dict:
         "source": seen("source"),
         "stage": seen("stage"),
         "lost_category": seen("lost_category"),
+        "seniority": seen("seniority"),
+        "speciality": seen("speciality"),
+        "funding_stage": seen("funding_stage"),
+        "employee_band": seen("employee_band"),
         "resume": seen("resume_label"),
         "company": seen("company"),
     }

@@ -204,6 +204,25 @@ score threads by hand; every other feature works identically.
   and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
   no key the panel simply doesn't appear and nothing else about the app
   changes.
+- **Automatic classification**: every application carries a **Seniority**
+  (Director+ / Manager) and a **Speciality** (Systems / Strategy / both), read
+  from the linked posting's job description. It runs when you link or change
+  the posting — not on every save — and never touches a value you set yourself.
+  Blank is a real answer: an individual-contributor posting is neither
+  Director+ nor Manager, and the classifier declines rather than rounding it
+  into the nearer one, because a category padded with roles that don't belong
+  in it produces a comparison that's confidently wrong instead of visibly thin.
+  Both fields are filterable on Insights.
+- **Company lookup**: each company carries a **Funding stage** and an
+  **Employee band**, read off its own website on a button press. These are the
+  only derived fields in the app that can't be checked against anything already
+  on the record, so they're the only ones that store a source URL and a date —
+  a two-year-old "Series A" should read as two years old, not as current. The
+  classifier is forbidden from filling them from what a model remembers: a
+  recalled funding round is frequently stale, can't be cited, and would sit
+  beside a URL it didn't come from. If the page doesn't say, the field stays
+  blank and the panel tells you it looked. Needs `FIRECRAWL_API_KEY` for
+  JavaScript-heavy sites; plain pages work without one.
 - **Insights**: the analytics and the chat on one page, because they answer the
   same question from two directions. On top: three durations — how long you
   work an angle in before committing (Staging → Qualification), how long from

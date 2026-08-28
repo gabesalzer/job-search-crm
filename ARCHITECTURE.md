@@ -1381,6 +1381,76 @@ handful of records the rows are frankly more informative than the summary above
 them — an average of four hides both the spread and which pursuit produced
 which number.
 
+## Two classifications, and why they are not the same feature
+
+`app/classify.py` holds both, and they look alike in code and differ in kind.
+
+**Seniority and Speciality read text the app already holds.** The job
+description is on the record; a classification of it is checkable in one click
+against the source that produced it, and it cannot go stale, because the JD
+does not change after it is saved. Same regime as the automatic thread read, so
+it gets the same trigger: it fires on a save, specifically when the *linked
+posting changes*. Not on every save — editing a note must not cost an API call,
+and the previous answer is still correct for a JD nobody touched.
+
+**Funding stage and Employee band are claims about the outside world.** Nothing
+in the database can confirm them, they were true on a date rather than in
+general, and the page they came from may be years old. So they are the only
+derived fields in the app that carry a **source URL and a date**, and the only
+ones behind a button. How much judgment a step needs decides how automatic it
+is allowed to be.
+
+### The rule that keeps the second one honest
+
+Only text actually fetched from the site may produce a value. The prompt
+forbids answering from what the model remembers, in those words, because a
+recalled funding round is the worst kind of wrong here: frequently eighteen
+months stale, impossible to cite, and — stored next to `enrichment_url` — it
+would appear to have been read off a page it never appeared on. If the page
+does not say, the answer is a decline and the field stays blank.
+
+This is why the project's own watchlist work concluded that funding stage was
+Crunchbase's job. Company sites mostly do not carry it. The feature is built to
+report that honestly rather than to fill the column.
+
+### Both parsers refuse rather than guess, and they refuse differently
+
+A classification is a small, plausible-looking value that nothing downstream
+can distinguish from a correct one. So a reply that does not parse writes
+nothing at all — no partial saves, no defaulting to the commonest value.
+
+The two differ in what counts as parsed, and the difference is not an
+inconsistency:
+
+- **The posting parser demands both fields.** Seniority and Speciality are
+  independent judgments, and a reply that lost the requested shape on one line
+  has not earned trust on the other.
+- **The company parser accepts half.** A page very often states headcount and
+  not funding, or the reverse, and refusing both would discard the fact that
+  *was* found. Its `understood` flag is true when either field produced a value
+  **or** both were answered cleanly — including both being explicit declines.
+  A first version used "either field parsed", which was wrong: a declined
+  funding line plus a garbled headcount line satisfied it, and got recorded as
+  a completed lookup that found nothing, when in fact nothing was found *and*
+  half the reply was malformed. A test caught it.
+
+### Provenance, for the fourth time
+
+`classification_source` and `enrichment_source` are NULL for a value you typed
+and `"model"` for a derived one, exactly mirroring `EmailThread.rating_source`.
+The same three rules apply: a human value is never overwritten; editing a field
+claims it and drops the machine's note, model and URL along with it; and
+"looked and declined" must stay distinguishable from "nobody has looked",
+because both leave the field blank and the page has to say which.
+
+### Where the values go
+
+Both classifications and both company facts are carried into the chat corpus
+and are filterable and comparable on Insights. Without that they would be
+write-only: stored, and invisible to everything that could use them. "How do
+Director+ roles convert against Manager" is the question these fields exist to
+make askable.
+
 ## The chat drives the charts, and the boundary on how far
 
 Analytics and Ask were separate pages and are now one, `/insights`. They answer
