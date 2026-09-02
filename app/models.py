@@ -562,6 +562,20 @@ class JobApplication(Base):
     #   * `notes` stays a running scratchpad of whatever happened lately.
     # Keeping them apart means a viability check has a stable thing to read
     # instead of having to sift a chronological log.
+    # What you have decided to do about this pursuit next. Free text rather
+    # than a picklist: a next step is "email Todd the deck by Thursday", and
+    # any enum that could hold that would have to be so generic it stopped
+    # meaning anything.
+    #
+    # On the Application rather than on JobPosting, which is where it was first
+    # proposed. The board renders Applications, the posting link is optional, and
+    # ARCHITECTURE.md keeps the two apart precisely because one posting can carry
+    # several applications (re-applying with a new resume, or a reposted role) --
+    # a next step hung on the posting would be shared between those attempts and
+    # would be invisible on every card with no posting linked. A next step is a
+    # property of the pursuit, not of the advertisement.
+    next_steps = Column(Text)
+
     context = Column(Text)
 
     notes = Column(Text)

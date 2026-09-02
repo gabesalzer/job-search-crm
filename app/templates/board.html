@@ -76,6 +76,13 @@
           </div>
         </div>
         <div class="co">{{ app.company.name if app.company else "—" }}</div>
+        {# One line, truncated, with the whole thing on hover. A next step is a
+           sentence and a card is 264px wide, so wrapping it would push the
+           score below the fold on every card that has one. The full value is
+           always on the edit page, so the tooltip enhances rather than gates. #}
+        {% if app.next_steps %}
+        <div class="next" title="{{ app.next_steps }}">{{ app.next_steps }}</div>
+        {% endif %}
         {% set fc = forecasts.get(app.id) if forecasts else None %}
         {% set age = activity_ages.get(app.id) if activity_ages else None %}
         {% if fc %}

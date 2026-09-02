@@ -213,6 +213,14 @@ score threads by hand; every other feature works identically.
   and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
   no key the panel simply doesn't appear and nothing else about the app
   changes.
+- **Next steps**: each application carries a free-text next step, shown as one
+  line on its board card so the whole pipeline reads as a to-do list rather
+  than a status display. It lives on the Application rather than the Posting,
+  because the board renders applications, the posting link is optional, and one
+  posting can carry several applications — a next step hung on the ad would be
+  shared between re-application attempts and invisible on any card with no
+  posting linked. Long text clips with the full value on hover; a card with
+  nothing set shows no line at all.
 - **Automatic classification**: every application carries a **Seniority**
   (Director+ / Manager) and a **Speciality** (Systems / Strategy / both), read
   from the linked posting's job description. It runs when you link or change

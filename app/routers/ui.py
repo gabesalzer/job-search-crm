@@ -972,6 +972,7 @@ def update_application_ui(
     updated_at: str = Form(""),
     notes: str = Form(""),
     context: str = Form(""),
+    next_steps: str = Form(""),
     source: str = Form(""),
     manual_forecast: str = Form(""),
     champion: str = Form(""),
@@ -994,6 +995,7 @@ def update_application_ui(
     app_obj.applied_date = _parse_dt(applied_date)
     app_obj.notes = notes or None
     app_obj.context = context or None
+    app_obj.next_steps = next_steps or None
     # Blank stays NULL rather than defaulting to a source -- "we never recorded
     # how this one started" and "this one was outbound" are different facts,
     # and collapsing them would quietly bias any later source-conversion read.
@@ -2158,6 +2160,7 @@ def _chat_corpus(db: Session, analytics: Optional[dict] = None) -> str:
             "lost_reason": a.lost_reason,
             "lost_category": a.lost_category.value if a.lost_category else None,
             "context": a.context,
+            "next_steps": a.next_steps,
             "notes": a.notes,
             "resume_label": a.resume.label if a.resume else None,
             "posting": posting,

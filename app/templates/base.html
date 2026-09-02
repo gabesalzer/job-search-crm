@@ -120,7 +120,12 @@
      eight-stage board that already scrolls. Lifting the actions out of flow
      (below) gives the title the full card width back, which is worth more
      than the pixels and costs nothing. */
-  .col{flex:0 0 264px;background:var(--panel);border:1px solid var(--line);
+  /* `min-width:0` is load-bearing, not tidying. A flex item defaults to
+     min-width:auto, which lets its content override the flex basis -- so the
+     nowrap next-step line stretched the whole column to fit the longest
+     sentence on the board, and column width became a function of how much you
+     had typed. With this, the basis holds and the text ellipsises instead. */
+  .col{flex:0 0 264px;min-width:0;background:var(--panel);border:1px solid var(--line);
     border-radius:var(--radius-lg);display:flex;flex-direction:column;
     max-height:calc(100vh - 230px);scroll-snap-align:start}
   .col h2{font-size:var(--fs-2xs);text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);
@@ -143,6 +148,13 @@
      word on line two, which is most of why the old cards looked untended. */
   .card .title{font-weight:600;margin-bottom:1px;line-height:1.35;text-wrap:balance}
   .card .co{color:var(--muted);font-size:var(--fs-sm)}
+  /* The next step you set yourself. Ink rather than muted, because it is the
+     one thing on the card that is a request rather than a fact -- but at the
+     small step, so it does not compete with the forecast number the board
+     exists to compare. The arrow marks it as an action without a label. */
+  .card .next{margin-top:var(--s-1);font-size:var(--fs-xs);color:var(--ink);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .next::before{content:"→ ";color:var(--accent);font-weight:600}
   .card .metarow{margin-top:var(--s-2);display:flex;gap:var(--s-1);flex-wrap:wrap;align-items:center}
   .card .scorerow{margin-top:var(--s-3);display:flex;gap:var(--s-2);align-items:baseline}
   /* The headline number was the same weight as a job title, so a 38 and a 79

@@ -55,6 +55,7 @@ app_obj = SimpleNamespace(
     created_at=datetime(2026, 6, 28, 9, 0), updated_at=datetime(2026, 7, 12, 16, 30),
     last_activity_date=datetime(2026, 7, 10, 15, 0),
     email_threads=[], context="Team is 4 people; comp band unclear.", source=enum("Referral"),
+    next_steps=None,
     manual_forecast=enum("Best Case"),
     stage_history=[
         SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
@@ -638,6 +639,39 @@ cases = [
         }),
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
+    }),
+    # --- Next steps on the card --------------------------------------------
+    # A long one, because the card is 264px wide and the failure mode is a
+    # sentence wrapping to three lines and pushing the forecast below the fold.
+    ("board.html (next steps set)", {
+        "active": "board", "stages": ["Qualification", "Discovery"],
+        "grouped": {
+            "Qualification": [SimpleNamespace(**{
+                **app_obj.__dict__,
+                "next_steps": "Send Todd the revised deck and ask for the "
+                              "panel date before Friday"})],
+            "Discovery": [SimpleNamespace(**{**app_obj.__dict__,
+                                            "next_steps": "Prep the takehome"})],
+        },
+        "forecasts": {app_obj.id: forecast}, "activity_ages": {app_obj.id: 3},
+        "default_stage": "Qualification", "companies": [company],
+        "resumes": [resume], "postings": [posting], "sources": ["Referral"],
+    }),
+    # Blank on every card, which is the state the board spends most of its life
+    # in -- the line has to disappear rather than leave a gap or a bare arrow.
+    ("board.html (no next steps)", {
+        "active": "board", "stages": ["Qualification"],
+        "grouped": {"Qualification": [SimpleNamespace(**{**app_obj.__dict__,
+                                                        "next_steps": None})]},
+        "forecasts": {}, "activity_ages": {}, "default_stage": "Qualification",
+        "companies": [company], "resumes": [resume], "postings": [posting],
+        "sources": ["Referral"],
+    }),
+    ("application_edit.html (next steps set)", {
+        **APP_EDIT_BASE,
+        "app_obj": SimpleNamespace(**{
+            **app_obj.__dict__,
+            "next_steps": "Chase the recruiter for a panel date."}),
     }),
     # --- Classification and enrichment states ------------------------------
     # The panel's four branches. Three are states a happy-path check never

@@ -143,6 +143,17 @@
     </div>
 
     <div class="field" style="margin-top:0.5rem">
+      <label>Next steps</label>
+      <textarea name="next_steps" rows="2" placeholder="The one thing you have decided to do about this next — who you owe what, and by when.">{{ app_obj.next_steps or '' }}</textarea>
+      <p style="font-size:0.74rem;color:var(--neutral);margin:0.25rem 0 0">
+        Shows on the board card, so keep it to the action rather than the
+        reasoning — the reasoning belongs in Context below. Leave it empty once
+        it is done; a card carrying a step you already took is worse than a card
+        carrying none.
+      </p>
+    </div>
+
+    <div class="field" style="margin-top:0.5rem">
       <label>Context</label>
       <textarea name="context" rows="4" placeholder="Why this role is worth pursuing, what you know about the team, comp, timeline, and what would make you walk.">{{ app_obj.context or '' }}</textarea>
       <p style="font-size:0.74rem;color:var(--neutral);margin:0.25rem 0 0">
