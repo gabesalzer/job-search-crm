@@ -958,6 +958,66 @@ class ChatMessage(Base):
     created_at = Column(DateTime, default=_utcnow)
 
 
+class LogEntry(Base):
+    """One dictated or typed update, and what it was allowed to do to the record.
+
+    The note is kept after the changes are applied, which is the whole reason
+    this is a table rather than a transient form post. Three things fall out of
+    keeping it, and each one is a question the app could not answer otherwise:
+
+    * *Why does this field say that?* A next step that reads oddly six weeks
+      later is traceable to the sentence that produced it, rather than being an
+      anonymous string somebody typed.
+    * *Did I already log this call?* The failure mode of a voice log is
+      double-entry -- you dictate on the walk home and again at your desk. The
+      list of recent notes is the cheapest possible answer, and it works
+      because a person recognises their own words instantly.
+    * *What did the model get wrong?* ``proposal`` holds everything that was
+      offered and ``applied`` holds only what was approved. The difference
+      between them is the record of the review gate actually doing its job,
+      and it is the only way to notice the prompt drifting.
+
+    ``application_id`` is a convenience lookup for the common single-record
+    note, set when a proposal resolves to exactly one application, so the
+    application's own page can show the notes that shaped it. It is deliberately
+    not the authoritative link: a note can legitimately touch two applications
+    ("caught up on Condor and Sierra today") and ``applied`` is what actually
+    says which. Nullable, SET NULL on delete -- a note survives the application
+    it mentioned, because the words were still said.
+
+    ``status`` is pending / applied / discarded. Pending exists because of the
+    API path: something posting a note from outside the browser cannot approve
+    its own changes, so it leaves them queued for the next time you open the
+    app. That is the design working as intended rather than a limitation --
+    the review gate does not get an exception for automation.
+    """
+
+    __tablename__ = "log_entries"
+
+    id = Column(Integer, primary_key=True)
+    text = Column(Text, nullable=False)          # what you actually said
+    # "web" or "api" -- which door it came in by. Diagnostic, not data.
+    origin = Column(String(16), default="web")
+    status = Column(String(16), default="pending", index=True)
+    application_id = Column(
+        Integer, ForeignKey("job_applications.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    # JSON blobs rather than a child table. These are an audit trail read by a
+    # person, never queried by field, and a normalised ProposedChange table
+    # would add a model, a cascade and a migration to support a query nothing
+    # makes. If that changes, the rows are still here to backfill from.
+    proposal = Column(Text)      # every change offered, as JSON
+    applied = Column(Text)       # only the ones approved, as JSON
+    rejected = Column(Text)      # what the parser threw out, and why
+    unmatched = Column(Text)     # what the model could not place
+    prose = Column(Text)         # the sentence the model wrote above its block
+    model = Column(String(64))
+    usage = Column(Text)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    resolved_at = Column(DateTime)
+
+
 class LookingFor(Base):
     """Your standing statement of what you want, and the disqualifying floor.
 

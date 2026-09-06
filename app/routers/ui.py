@@ -24,6 +24,7 @@ from .. import chat as chat_model
 from .. import classify
 from .. import fit
 from .. import forecast as forecast_model
+from .. import logspec
 from .. import models
 from .. import thread_read
 from .. import viewspec
@@ -2698,3 +2699,256 @@ async def update_fit_ui(application_id: int, request: Request,
     db.commit()
     return RedirectResponse(
         url="/applications/{}/edit".format(application_id), status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Log: say what happened, review what it proposes, apply what you approve
+# --------------------------------------------------------------------------- #
+LOST_CATEGORY_VALUES = [c.value for c in models.LostCategory]
+
+# How many recent notes the page lists. Enough to answer "did I already log
+# this call?", which is the question the history exists for, and short enough
+# that the page stays a place you dictate into rather than a place you read.
+LOG_HISTORY = 12
+
+
+def _log_applications(db: Session) -> List[dict]:
+    """The applications a note is allowed to touch, as plain dicts.
+
+    Open ones only. A note is about live work, and including forty closed
+    records would make the model's job harder for no gain -- more candidates to
+    confuse "Condor" with, and a longer packet to pay for. Reopening something
+    closed is a hand edit, which is the right weight for that decision.
+    """
+    apps = (
+        db.query(models.JobApplication)
+        .options(selectinload(models.JobApplication.company),
+                 selectinload(models.JobApplication.people))
+        .filter(models.JobApplication.stage.notin_(
+            [models.Stage.CLOSED_WON, models.Stage.CLOSED_LOST]))
+        .order_by(models.JobApplication.last_activity_date.desc())
+        .all()
+    )
+    rows = []
+    for app_obj in apps:
+        row = {
+            "id": app_obj.id,
+            "company": app_obj.company.name if app_obj.company else None,
+            "title": app_obj.title,
+            "stage": app_obj.stage.value if app_obj.stage else None,
+            # People ride along because a note names humans far more often than
+            # it names companies -- "Todd said" has to resolve to something,
+            # and without this the model has only the company name to go on.
+            "people": [p.name for p in app_obj.people if p.name],
+        }
+        for field in logspec.TEXT_FIELDS:
+            row[field] = getattr(app_obj, field, None)
+        rows.append(row)
+    return rows
+
+
+def _propose_from_note(db: Session, note: str, *, origin: str
+                       ) -> models.LogEntry:
+    """Read one note and store what it proposes. Writes nothing to the record.
+
+    Always returns a LogEntry, including on failure: a note that could not be
+    read is still a note you said, and losing it because the API was down would
+    be the worst possible failure for a capture tool. The entry carries the
+    error in `rejected` and stays `pending`, so it can be retried.
+    """
+    entry = models.LogEntry(text=note, origin=origin, status="pending")
+    db.add(entry)
+
+    if not llm.enabled():
+        entry.rejected = json.dumps(
+            ["Reading notes is off — no ANTHROPIC_API_KEY is set. The note was "
+             "kept."])
+        db.commit()
+        return entry
+
+    apps = _log_applications(db)
+    if not apps:
+        entry.rejected = json.dumps(
+            ["There are no open applications for a note to update. The note "
+             "was kept."])
+        db.commit()
+        return entry
+
+    usage: dict = {}
+    try:
+        text, model_used = llm.generate(
+            logspec.system_prompt(stages=STAGE_ORDER_VALUES,
+                                  categories=LOST_CATEGORY_VALUES),
+            logspec.build_messages(logspec.build_packet(apps, note)),
+            max_tokens=logspec.MAX_TOKENS,
+            timeout=90,
+            usage_out=usage,
+        )
+    except llm.LLMError as exc:
+        entry.rejected = json.dumps([str(exc)])
+        db.commit()
+        return entry
+    except Exception as exc:  # noqa: BLE001 -- the note must survive anything
+        entry.rejected = json.dumps(
+            ["Reading the note failed unexpectedly: {}".format(exc)])
+        db.commit()
+        return entry
+
+    prose, block = logspec.extract_block(text)
+    changes, unmatched, rejected = logspec.parse(
+        block, applications=apps, stages=STAGE_ORDER_VALUES,
+        categories=LOST_CATEGORY_VALUES)
+
+    entry.prose = prose or None
+    entry.proposal = json.dumps(changes)
+    entry.unmatched = json.dumps(unmatched) if unmatched else None
+    entry.rejected = json.dumps(rejected) if rejected else None
+    entry.model = model_used
+    entry.usage = json.dumps(usage) if usage else None
+    # The convenience link, set only when the whole note is about one record.
+    # See LogEntry's docstring for why this is not the authoritative one.
+    touched = {c["application_id"] for c in changes}
+    entry.application_id = touched.pop() if len(touched) == 1 else None
+    db.commit()
+    return entry
+
+
+def _apply_changes(db: Session, entry: models.LogEntry,
+                   approved_keys: set) -> List[dict]:
+    """Write the approved changes. The only function in this feature that writes.
+
+    Kept to one function on purpose. It is the seam that makes this portable:
+    swapping the target from these ORM objects to a Salesforce or HubSpot API
+    is a rewrite of this body and nothing else, because every other part of the
+    feature deals in plain dicts.
+
+    Re-reads the current value at write time rather than trusting the `current`
+    captured when the proposal was made. A pending note can sit for a day while
+    you edit the record by hand, and applying a stale append would silently
+    drop whatever you typed in between.
+    """
+    proposed = json.loads(entry.proposal or "[]")
+    written = []
+    for change in proposed:
+        if change["key"] not in approved_keys:
+            continue
+        app_obj = db.get(models.JobApplication, change["application_id"])
+        if app_obj is None:
+            continue          # deleted between proposing and approving
+
+        field, value, mode = change["field"], change["value"], change["mode"]
+        if field == "stage":
+            # Assigning stage fires the StageHistory listener, so a stage moved
+            # by voice lands in the funnel history identically to one dragged
+            # on the board. Nothing here needs to know that; it is why stage is
+            # set through the attribute rather than through an UPDATE.
+            app_obj.stage = models.Stage(value)
+        elif field == "lost_category":
+            app_obj.lost_category = models.LostCategory(value)
+        else:
+            setattr(app_obj, field,
+                    logspec.merged_value(getattr(app_obj, field), value, mode))
+
+        # A voice update is activity. Without this a dictated note leaves the
+        # card looking untouched for as long as the board's age counter says.
+        app_obj.last_activity_date = datetime.now(timezone.utc)
+        written.append(change)
+
+    entry.applied = json.dumps(written)
+    entry.status = "applied" if written else "discarded"
+    entry.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+    return written
+
+
+def _log_context(db: Session, entry: Optional[models.LogEntry] = None,
+                 *, error: str = "", applied: str = "") -> dict:
+    recent = (
+        db.query(models.LogEntry)
+        .order_by(models.LogEntry.created_at.desc(), models.LogEntry.id.desc())
+        .limit(LOG_HISTORY + 1)
+        .all()
+    )
+    # The note under review is quoted back above; listing it again three inches
+    # lower reads as a duplicate rather than as history.
+    recent = [r for r in recent if entry is None or r.id != entry.id][:LOG_HISTORY]
+    pending = (
+        db.query(models.LogEntry)
+        .filter(models.LogEntry.status == "pending")
+        .order_by(models.LogEntry.created_at.desc())
+        .all()
+    )
+    return {
+        "active": "log",
+        "entry": entry,
+        "changes": json.loads(entry.proposal or "[]") if entry else [],
+        "unmatched": json.loads(entry.unmatched or "[]") if entry else [],
+        "rejected": json.loads(entry.rejected or "[]") if entry else [],
+        "recent": recent,
+        # Anything queued by the API and not yet reviewed. Surfaced at the top
+        # of the page rather than in the history, because a pending change is
+        # work waiting on you and history is not.
+        "pending": [p for p in pending if entry is None or p.id != entry.id],
+        "enabled": llm.enabled(),
+        "error": error,
+        "applied": applied,
+    }
+
+
+@router.get("/log")
+def log_page(request: Request, error: str = "", applied: str = "",
+             entry_id: int = 0, db: Session = Depends(get_db)):
+    entry = db.get(models.LogEntry, entry_id) if entry_id else None
+    return templates.TemplateResponse(
+        request, "log.html", _log_context(db, entry, error=error, applied=applied))
+
+
+@router.post("/ui/log")
+def log_submit(note: str = Form(""), db: Session = Depends(get_db)):
+    """Read a note and show what it proposes. Still writes nothing."""
+    note = (note or "").strip()
+    if not note:
+        return RedirectResponse(url="/log", status_code=303)
+    entry = _propose_from_note(db, note, origin="web")
+    return RedirectResponse(
+        url="/log?entry_id={}".format(entry.id), status_code=303)
+
+
+@router.post("/ui/log/{entry_id}/apply")
+async def log_apply(entry_id: int, request: Request,
+                    db: Session = Depends(get_db)):
+    """Apply exactly the changes whose boxes are ticked, and nothing else.
+
+    `async` for the same reason as the fit form: the checkbox names are built
+    from ids at render time, so they cannot be declared as parameters and the
+    raw form has to be read.
+    """
+    entry = _get_or_404(db, models.LogEntry, entry_id)
+    form = await request.form()
+    approved = {v for k, v in form.multi_items() if k == "approve"}
+    written = _apply_changes(db, entry, approved)
+    return RedirectResponse(
+        url="/log?applied={}".format(quote(logspec.summarise(written))),
+        status_code=303)
+
+
+@router.post("/ui/log/{entry_id}/discard")
+def log_discard(entry_id: int, db: Session = Depends(get_db)):
+    """Keep the note, apply none of it.
+
+    Discarding writes `applied` as an empty list rather than leaving it NULL,
+    so "reviewed and rejected everything" stays distinguishable from "never
+    reviewed" -- the same distinction the champion field and the rating
+    provenance both exist to preserve.
+    """
+    entry = _get_or_404(db, models.LogEntry, entry_id)
+    _apply_changes(db, entry, set())
+    return RedirectResponse(url="/log", status_code=303)
+
+
+@router.post("/ui/log/{entry_id}/delete")
+def log_delete(entry_id: int, db: Session = Depends(get_db)):
+    entry = _get_or_404(db, models.LogEntry, entry_id)
+    db.delete(entry)
+    db.commit()
+    return RedirectResponse(url="/log", status_code=303)

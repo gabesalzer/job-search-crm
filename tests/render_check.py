@@ -320,6 +320,27 @@ INSIGHTS_BASE = {
     "error": "",
 }
 
+
+# --------------------------------------------------------------------------- #
+# Log fixtures
+# --------------------------------------------------------------------------- #
+NOW = datetime(2026, 9, 6, 14, 30)
+
+LOG_ENTRY = SimpleNamespace(
+    id=1,
+    text=("Talked to Todd at Condor — the screen went well and they're setting "
+          "up a panel for next week. Comp came up on Sierra and it's light "
+          "against my number. I said I'd send the RevOps deck by Friday."),
+    prose="Heard a stage move on Condor and a comp risk on Sierra.",
+    status="pending", origin="web", created_at=NOW,
+)
+
+LOG_BASE = {
+    "active": "log", "entry": None, "changes": [], "unmatched": [],
+    "rejected": [], "recent": [], "pending": [], "enabled": True,
+    "error": "", "applied": "",
+}
+
 cases = [
     ("company_edit.html", {"active": "companies", "company": company,
                           "company_types": ["Employer", "Agency", "Both"],
@@ -956,6 +977,64 @@ cases = [
                      SimpleNamespace(id=2, role="assistant", content="Older answer.",
                                      model=None, usage=None, view_spec=None,
                                      created_at=None)],
+    }),
+    # --- Log: the review screen ---------------------------------------------
+    # The load-bearing case. A replaced field must show what is being lost
+    # alongside what replaces it, an appended one must not (nothing is lost),
+    # and an empty current value must read as empty rather than as a gap.
+    ("log.html (changes to review)", {
+        **LOG_BASE,
+        "entry": LOG_ENTRY,
+        "changes": [
+            {"key": "3:stage", "application_id": 3, "company": "Condor",
+             "title": "Head of RevOps", "field": "stage", "label": "stage",
+             "mode": "set", "current": "Qualification", "value": "Discovery",
+             "why": "said a panel is being scheduled for next week"},
+            {"key": "3:next_steps", "application_id": 3, "company": "Condor",
+             "title": "Head of RevOps", "field": "next_steps",
+             "label": "next steps", "mode": "set", "current": "Wait for Todd",
+             "value": "Send Todd the RevOps deck before Friday",
+             "why": "committed to sending the deck"},
+            {"key": "7:risks", "application_id": 7, "company": "Sierra",
+             "title": "RevOps Manager", "field": "risks", "label": "risks",
+             "mode": "set", "current": "",
+             "value": "Comp band is light against my number",
+             "why": "comp came up and it was light"},
+            {"key": "7:notes", "application_id": 7, "company": "Sierra",
+             "title": "RevOps Manager", "field": "notes", "label": "notes",
+             "mode": "append", "current": "Applied via referral.",
+             "value": "Went quiet after the screen.", "why": "no reply"},
+        ],
+        "unmatched": ["mentioned a Vercel recruiter — no application on file"],
+        "rejected": ["'champion' isn't a field a note can change, so it was "
+                     "dropped."],
+    }),
+    # Nothing proposed and nothing to review: the empty page you land on.
+    ("log.html (nothing logged yet)", LOG_BASE),
+    # A note read as chatter. There is an entry but no changes, which must read
+    # as "nothing to record" rather than as a broken review screen.
+    ("log.html (note with no changes)", {
+        **LOG_BASE,
+        "entry": SimpleNamespace(**{**LOG_ENTRY.__dict__,
+                                    "prose": "Nothing here to record."}),
+        "recent": [LOG_ENTRY],
+    }),
+    # The API path: something queued while you were away.
+    ("log.html (pending from the API)", {
+        **LOG_BASE,
+        "pending": [SimpleNamespace(
+            id=9, text="Voice memo from the walk home about Condor.",
+            status="pending", origin="api", created_at=NOW, prose=None)],
+        "recent": [SimpleNamespace(
+            id=9, text="Voice memo from the walk home about Condor.",
+            status="pending", origin="api", created_at=NOW, prose=None)],
+    }),
+    # No key set: notes are still kept, but nothing is read from them.
+    ("log.html (reading disabled)", {**LOG_BASE, "enabled": False}),
+    # Both banners at once, which is what an apply-then-error looks like.
+    ("log.html (applied and errored)", {
+        **LOG_BASE, "applied": "Condor (stage, next steps)",
+        "error": "API returned 500: overloaded_error",
     }),
 ]
 
