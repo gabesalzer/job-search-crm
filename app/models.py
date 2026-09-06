@@ -576,6 +576,15 @@ class JobApplication(Base):
     # property of the pursuit, not of the advertisement.
     next_steps = Column(Text)
 
+    # --- Sales-qualification fields, kept as free text --------------------
+    # `pain` is what the employer is trying to fix by hiring, `process` is how
+    # they decide, `risks` is what could kill this. All three are judgments
+    # that only make sense in sentences, so none is a picklist -- "the VP who
+    # owns this is leaving in Q1" has no enum that could hold it.
+    pain = Column(Text)
+    process = Column(Text)
+    risks = Column(Text)
+
     context = Column(Text)
 
     notes = Column(Text)
@@ -605,6 +614,10 @@ class JobApplication(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     company = relationship("Company", back_populates="applications")
+    criterion_ratings = relationship(
+        "CriterionRating", back_populates="application",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
     job_posting = relationship("JobPosting", back_populates="applications")
     resume = relationship("Resume", back_populates="applications")
 
@@ -943,6 +956,100 @@ class ChatMessage(Base):
     # one changed what you are looking at, which is unreadable a day later.
     view_spec = Column(Text)
     created_at = Column(DateTime, default=_utcnow)
+
+
+class LookingFor(Base):
+    """Your standing statement of what you want, and the disqualifying floor.
+
+    A singleton -- one row, id 1 -- because there is one person using this and
+    one thing they are looking for. Modelled as a table rather than a config
+    file so it is editable in the app and travels with the database.
+
+    `statement` is prose you write for yourself: the things that do not fit a
+    criterion, the reasoning behind the list, what you would walk away from.
+    The criteria below turn part of it into something rateable; this holds the
+    rest, and it is the half worth re-reading before a decision.
+
+    `dq_threshold` is the floor. Any criterion rated *below* it disqualifies
+    the application outright, however well it scores elsewhere -- the same
+    shape as the forecast's confidence gate, where `none` forces Pipeline no
+    matter how good the setup facts look. An average is easy to talk yourself
+    into; a floor is not.
+    """
+
+    __tablename__ = "looking_for"
+
+    id = Column(Integer, primary_key=True)
+    statement = Column(Text)
+    # Nullable with a Python-side default rather than NOT NULL, so a database
+    # that predates this column gets NULL and the reader supplies the default
+    # (see fit.DEFAULT_THRESHOLD). ensure_schema only ever issues ADD COLUMN.
+    dq_threshold = Column(Integer, default=4)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class Criterion(Base):
+    """One axis you evaluate opportunities on.
+
+    User-defined rather than a fixed enum, because the axes that matter are
+    yours and would otherwise be my guesses about your priorities. The list
+    itself is the valuable artifact -- writing down what you actually want is
+    most of the work this feature exists to make you do.
+
+    No weight column. Weighting was considered and dropped: six hand-set
+    weights produce a rollup that reads far more precise than the judgment
+    behind it, and the disqualifying floor already carries the "this one really
+    matters" signal that weights were reaching for.
+    """
+
+    __tablename__ = "criteria"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), nullable=False)
+    # What a 10 looks like, in your words. Rating an axis you defined weeks ago
+    # is guesswork without it.
+    description = Column(Text)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    ratings = relationship(
+        "CriterionRating", back_populates="criterion",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+
+class CriterionRating(Base):
+    """How one application scores on one criterion, 1-10, by hand.
+
+    Master-detail to both sides: deleting a criterion or an application removes
+    its ratings, because a rating means nothing without both ends.
+
+    `score` stays nullable and blank is a first-class answer -- "I have not
+    judged this yet", which is the state most pairs are in most of the time.
+    A blank is excluded from the average rather than counted as zero, and it
+    never disqualifies: unknown and failed are opposite claims, and treating
+    the first as the second would disqualify every application the day the
+    criteria were created.
+    """
+
+    __tablename__ = "criterion_ratings"
+
+    id = Column(Integer, primary_key=True)
+    criterion_id = Column(
+        Integer, ForeignKey("criteria.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    application_id = Column(
+        Integer, ForeignKey("job_applications.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    score = Column(Integer)          # 1-10, NULL = not judged
+    note = Column(Text)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    criterion = relationship("Criterion", back_populates="ratings")
+    application = relationship("JobApplication", back_populates="criterion_ratings")
 
 
 # --------------------------------------------------------------------------- #

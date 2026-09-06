@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}What I'm looking for · Job Search CRM{% endblock %}
+{% block body %}
+<style>
+  .lfcol{max-width:var(--w-edit);margin:0 auto}
+  .lf-sec{margin-bottom:var(--s-7)}
+  .lf-sec h2{font-size:var(--fs-lg);font-weight:620;margin:0 0 var(--s-1);
+    letter-spacing:-0.01em}
+  .lf-sec .note{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s-4);
+    max-width:var(--w-prose)}
+  .crit{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius-lg);padding:var(--s-4);margin-bottom:var(--s-3);
+    box-shadow:var(--shadow-sm)}
+  .crit .row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr) auto;
+    gap:var(--s-3);align-items:start}
+  .crit .actions{padding-top:1.35rem}
+  .threshold{display:flex;gap:var(--s-3);align-items:flex-end;flex-wrap:wrap}
+  .threshold .field{max-width:120px}
+  table.rank{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}
+  table.rank th{text-align:left;font-size:var(--fs-2xs);color:var(--muted);
+    font-weight:600;text-transform:uppercase;letter-spacing:0.03em;
+    padding:var(--s-3);border-bottom:1px solid var(--line);white-space:nowrap}
+  table.rank th.num,table.rank td.num{text-align:right;
+    font-variant-numeric:tabular-nums}
+  table.rank td{padding:var(--s-3);border-bottom:1px solid var(--line);
+    vertical-align:top}
+  table.rank tr:last-child td{border-bottom:none}
+  table.rank td.co{font-weight:550}
+  table.rank td .role{color:var(--muted);font-size:var(--fs-xs);display:block;
+    margin-top:1px}
+  table.rank .fit{font-weight:660;font-size:var(--fs-lg)}
+  table.rank .thin{color:var(--neutral)}
+  .dq{display:inline-flex;align-items:center;gap:var(--s-1);background:#fef2f2;
+    border:1px solid #fca5a5;color:var(--down);border-radius:999px;
+    padding:1px var(--s-2);font-size:var(--fs-2xs);font-weight:600}
+</style>
+
+<div class="lfcol">
+  <h1>What I'm looking for</h1>
+  <p class="subtitle">
+    Your standing criteria, written down before you are in the room. Every
+    application is rated against them, and the rating is yours — nothing here
+    calls a model or fills a number for you.
+  </p>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="lf-sec">
+    <h2>The statement</h2>
+    <p class="note">
+      The part that does not fit an axis: why the list is what it is, what you
+      would walk away from, what you are trying to be true of your next job.
+      This is the half worth re-reading before a decision.
+    </p>
+    <form method="post" action="/ui/looking-for">
+      <div class="panel" style="padding:var(--s-4)">
+        <div class="field">
+          <textarea name="statement" rows="6"
+            placeholder="What I actually want out of the next role, in my own words.">{{ looking_for.statement or '' }}</textarea>
+        </div>
+        <div class="threshold" style="margin-top:var(--s-4)">
+          <div class="field">
+            <label>Disqualifying floor</label>
+            <input type="number" name="dq_threshold" min="{{ scale_min }}"
+                   max="{{ scale_max }}" value="{{ threshold }}">
+          </div>
+          <p class="note" style="margin:0 0 var(--s-1);flex:1 1 320px">
+            Any axis rated <strong>below {{ threshold }}</strong> disqualifies
+            an application outright, however well it scores elsewhere. A floor
+            beats an average: one glorious axis can otherwise pull a fatal one
+            up out of sight, which is exactly what writing criteria down in
+            advance is meant to stop. An unrated axis never disqualifies —
+            unknown and failed are opposite claims.
+          </p>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="lf-sec">
+    <h2>The axes</h2>
+    <p class="note">
+      Each application gets a {{ scale_min }}–{{ scale_max }} on every axis, and
+      the fit score is the plain average of the ones you have rated. No weights:
+      six hand-set weights make a number that reads more precise than the
+      judgment behind it, and the floor already carries the "this one really
+      matters" signal weights were reaching for.
+    </p>
+
+    {% for crit in criteria %}
+    <div class="crit">
+      <form method="post" action="/ui/looking-for/criteria/{{ crit.id }}/edit">
+        <div class="row">
+          <div class="field">
+            <label>Axis</label>
+            <input name="name" value="{{ crit.name }}" required>
+          </div>
+          <div class="field">
+            <label>What a {{ scale_max }} looks like</label>
+            <input name="description" value="{{ crit.description or '' }}"
+                   placeholder="A note to your future self, so the rating means the same thing later.">
+          </div>
+          <div class="actions">
+            <button type="submit" class="linkbtn">Save</button>
+          </div>
+        </div>
+      </form>
+      <form method="post" action="/ui/looking-for/criteria/{{ crit.id }}/delete"
+            style="margin-top:var(--s-2)"
+            onsubmit="return confirm('Delete “{{ crit.name }}”? Every rating made against it goes too. This cannot be undone.');">
+        <button type="submit" class="linkbtn danger">Delete this axis</button>
+      </form>
+    </div>
+    {% else %}
+    <div class="empty" style="padding:var(--s-5) 0">
+      No axes yet. Add the first one below.
+    </div>
+    {% endfor %}
+
+    <details class="newform" style="margin-top:var(--s-4)">
+      <summary>Add an axis</summary>
+      <form method="post" action="/ui/looking-for/criteria">
+        <div class="form-grid">
+          <div class="field">
+            <label>Axis</label>
+            <input name="name" required placeholder="e.g. Manager quality">
+          </div>
+          <div class="field">
+            <label>What a {{ scale_max }} looks like</label>
+            <input name="description" placeholder="Optional, but it is what keeps ratings comparable over time.">
+          </div>
+        </div>
+        <div style="padding-bottom:var(--s-4)">
+          <button type="submit" class="btn">Add axis</button>
+        </div>
+      </form>
+    </details>
+  </div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <div class="lf-sec">
+    <h2>How the pipeline scores</h2>
+    <p class="note">
+      Fit answers a different question from the forecast. The forecast is
+      whether they want you; this is whether you want them. The pair is the
+      useful thing — a high fit you are unlikely to win is worth fighting for,
+      and a low fit you are cruising through is worth closing out.
+      Disqualified records sort last regardless of their average.
+    </p>
+    {% if ranked %}
+    <div class="tablewrap" style="overflow-x:auto;border:1px solid var(--line);
+         border-radius:var(--radius-lg);background:var(--panel)">
+      <table class="rank">
+        <thead>
+          <tr>
+            <th>Application</th>
+            <th>Stage</th>
+            <th class="num">Fit</th>
+            <th class="num">Rated</th>
+            <th>Standing</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in ranked %}
+          <tr>
+            <td class="co">
+              <a href="/applications/{{ row.id }}/edit">{{ row.company or '—' }}</a>
+              <span class="role">{{ row.title or '—' }}</span>
+            </td>
+            <td>{{ row.stage or '—' }}</td>
+            <td class="num">
+              {% if row.fit.mean is not none %}
+                <span class="fit">{{ row.fit.mean }}</span>
+              {% else %}
+                <span class="thin">—</span>
+              {% endif %}
+            </td>
+            <td class="num thin">{{ row.fit.rated }} of {{ row.fit.total }}</td>
+            <td>
+              {% if row.fit.disqualified %}
+                <span class="dq">DQ — {{ row.fit.failing|join(', ') }}</span>
+              {% elif row.fit.rated == 0 %}
+                <span class="thin">not rated yet</span>
+              {% elif not row.fit.complete %}
+                <span class="thin">partial</span>
+              {% else %}
+                <span class="thin">rated in full</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty" style="padding:var(--s-5) 0">
+      No applications to rate yet.
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -213,6 +213,9 @@ def build_corpus(applications: Optional[List[Dict[str, Any]]] = None,
             _line("Context", _clip(app.get("context"), MAX_NOTE_CHARS)),
             _line("Next steps I set myself",
                   _clip(app.get("next_steps"), MAX_NOTE_CHARS)),
+            _line("Their pain", _clip(app.get("pain"), MAX_NOTE_CHARS)),
+            _line("Their process", _clip(app.get("process"), MAX_NOTE_CHARS)),
+            _line("Risks", _clip(app.get("risks"), MAX_NOTE_CHARS)),
             _line("Notes", _clip(app.get("notes"), MAX_NOTE_CHARS)),
         ])
         posting = app.get("posting") or {}

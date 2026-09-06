@@ -55,7 +55,8 @@ app_obj = SimpleNamespace(
     created_at=datetime(2026, 6, 28, 9, 0), updated_at=datetime(2026, 7, 12, 16, 30),
     last_activity_date=datetime(2026, 7, 10, 15, 0),
     email_threads=[], context="Team is 4 people; comp band unclear.", source=enum("Referral"),
-    next_steps=None,
+    next_steps=None, pain=None, process=None, risks=None,
+    criterion_ratings=[],
     manual_forecast=enum("Best Case"),
     stage_history=[
         SimpleNamespace(id=10, from_stage=None, to_stage=enum("Saved"), changed_at=datetime(2026, 6, 28, 9, 0)),
@@ -275,6 +276,26 @@ EMPLOYEE_BANDS_FIXTURE = classify_model.EMPLOYEE_BANDS
 SENIORITY_FIXTURE = classify_model.SENIORITY_VALUES
 SPECIALITY_FIXTURE = classify_model.SPECIALITY_VALUES
 
+from app import fit as fit_model  # noqa: E402
+
+# Built from the real module, like the forecast fixtures, so the template is
+# smoke-tested against the shape the app actually emits.
+CRITERIA_FIXTURE = [
+    SimpleNamespace(id=i + 1, name=name, description=blurb, sort_order=i)
+    for i, (name, blurb) in enumerate(fit_model.STARTER_CRITERIA)
+]
+FIT_ROWS = [
+    {"criterion": c, "name": c.name,
+     "score": [9, 7, None, 8, 2, None][i], "note": None}
+    for i, c in enumerate(CRITERIA_FIXTURE)
+]
+# Part-rated and disqualified at once -- the two states that have to read
+# differently from each other and from "not rated at all".
+FIT_READING = fit_model.score(FIT_ROWS, threshold=4)
+FIT_UNRATED = fit_model.score(
+    [{"criterion": c, "name": c.name, "score": None} for c in CRITERIA_FIXTURE],
+    threshold=4)
+
 APP_EDIT_BASE = {
     "active": "board", "stages": ["Saved", "Applied", "Closed Lost"],
     "lost_categories": ["Compensation gap", "Other"],
@@ -285,6 +306,8 @@ APP_EDIT_BASE = {
     "read_result": "", "read_enabled": True, "unread_threads": 0,
     "declined_threads": 0, "brief": brief_empty, "brief_error": "",
     "classify_result": "",
+    "fit_rows": FIT_ROWS, "fit": FIT_READING,
+    "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
     "seniority_values": SENIORITY_FIXTURE,
     "speciality_values": SPECIALITY_FIXTURE,
 }
@@ -314,6 +337,8 @@ cases = [
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "read_result": "", "read_enabled": True, "classify_result": "",
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+        "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
         "seniority_values": ["Director+", "Manager"],
         "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_written, "brief_error": "",
@@ -334,6 +359,8 @@ cases = [
         "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "read_result": "", "read_enabled": True, "classify_result": "",
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+        "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
         "seniority_values": ["Director+", "Manager"],
         "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_empty, "brief_error": "",
@@ -361,6 +388,8 @@ cases = [
         "forecast": forecast, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "read_result": "", "read_enabled": True, "classify_result": "",
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+        "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
         "seniority_values": ["Director+", "Manager"],
         "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         # Same migration story as manual_forecast above: brief, brief_model and
@@ -379,6 +408,8 @@ cases = [
         "forecast": forecast_no_champion, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "read_result": "", "read_enabled": True, "classify_result": "",
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+        "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
         "seniority_values": ["Director+", "Manager"],
         "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_stale, "brief_error": "",
@@ -394,6 +425,8 @@ cases = [
         "forecast": forecast_thin, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "read_result": "", "read_enabled": True, "classify_result": "",
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+        "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
         "seniority_values": ["Director+", "Manager"],
         "speciality_values": ["Systems", "Strategy", "Systems + Strategy"], "unread_threads": 0, "declined_threads": 0,
         "brief": brief_off, "brief_error": "API returned 401: invalid x-api-key",
@@ -433,6 +466,8 @@ cases = [
         "forecast": forecast_unrated, "forecast_values": FORECAST_VALUES,
         "forecast_weights": FORECAST_WEIGHTS,
         "read_result": "", "read_enabled": True, "classify_result": "",
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+        "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
         "seniority_values": ["Director+", "Manager"],
         "speciality_values": ["Systems", "Strategy", "Systems + Strategy"],
         "unread_threads": 0, "declined_threads": 2,
@@ -639,6 +674,47 @@ cases = [
         }),
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
+    }),
+    # --- Fit and the Looking For tab ---------------------------------------
+    ("looking_for.html", {
+        "active": "looking-for",
+        "looking_for": SimpleNamespace(
+            statement="Systems and strategy, Series B or later, remote.",
+            dq_threshold=4),
+        "criteria": CRITERIA_FIXTURE, "threshold": 4,
+        "scale_min": 1, "scale_max": 10,
+        "ranked": fit_model.rank([
+            {"id": 4, "company": "Condor", "title": "VP RevOps",
+             "stage": "Discovery", "ratings": FIT_ROWS},
+            {"id": 5, "company": "Plaid", "title": "Ops Manager",
+             "stage": "Qualification",
+             "ratings": [{"name": c.name, "score": None} for c in CRITERIA_FIXTURE]},
+        ], threshold=4),
+    }),
+    # No axes defined and nothing to rank -- what a fresh database renders
+    # before the seed, and after deleting every axis.
+    ("looking_for.html (no axes yet)", {
+        "active": "looking-for",
+        "looking_for": SimpleNamespace(statement=None, dq_threshold=None),
+        "criteria": [], "threshold": 4, "scale_min": 1, "scale_max": 10,
+        "ranked": [],
+    }),
+    # Disqualified, and part-rated at the same time.
+    ("application_edit.html (fit, disqualified)", {
+        **APP_EDIT_BASE, "app_obj": app_obj,
+        "fit_rows": FIT_ROWS, "fit": FIT_READING,
+    }),
+    # Nothing rated: must read as unrated rather than as a zero score.
+    ("application_edit.html (fit, nothing rated)", {
+        **APP_EDIT_BASE, "app_obj": app_obj,
+        "fit_rows": [{"criterion": c, "name": c.name, "score": None, "note": None}
+                     for c in CRITERIA_FIXTURE],
+        "fit": FIT_UNRATED,
+    }),
+    # No axes exist, so the panel points at the tab instead of rendering a form.
+    ("application_edit.html (no axes defined)", {
+        **APP_EDIT_BASE, "app_obj": app_obj, "fit_rows": [],
+        "fit": fit_model.score([], threshold=4),
     }),
     # --- Next steps on the card --------------------------------------------
     # A long one, because the card is 264px wide and the failure mode is a

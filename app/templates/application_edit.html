@@ -153,6 +153,21 @@
       </p>
     </div>
 
+    <div class="form-grid" style="padding-top:0.5rem">
+      <div class="field">
+        <label>Pain</label>
+        <textarea name="pain" rows="3" placeholder="What are they actually trying to fix by hiring this role?">{{ app_obj.pain or '' }}</textarea>
+      </div>
+      <div class="field">
+        <label>Process</label>
+        <textarea name="process" rows="3" placeholder="How they decide — who signs off, how many rounds, on what timeline.">{{ app_obj.process or '' }}</textarea>
+      </div>
+      <div class="field">
+        <label>Risks</label>
+        <textarea name="risks" rows="3" placeholder="What could kill this — reorg, budget, a competing internal candidate.">{{ app_obj.risks or '' }}</textarea>
+      </div>
+    </div>
+
     <div class="field" style="margin-top:0.5rem">
       <label>Context</label>
       <textarea name="context" rows="4" placeholder="Why this role is worth pursuing, what you know about the team, comp, timeline, and what would make you walk.">{{ app_obj.context or '' }}</textarea>
@@ -176,6 +191,66 @@
         onsubmit="return confirm('Delete this application ({{ app_obj.title or 'Untitled role' }})? This also deletes its stage history and any meetings logged against it. This cannot be undone.');">
     <button type="submit" class="linkbtn danger">Delete this application</button>
   </form>
+</div>
+
+<div class="section">
+  <h2 style="font-size:1rem;margin:0 0 0.4rem">Fit against what you're looking for</h2>
+  <p style="font-size:0.78rem;color:var(--neutral);margin:0 0 0.6rem;max-width:var(--w-prose)">
+    Your judgment on each axis, {{ fit_scale_min }}–{{ fit_scale_max }}. The score is the plain average of
+    the ones you have rated — blanks stay out of it rather than dragging it
+    down, and a blank never disqualifies. Anything below
+    {{ fit_threshold }} does, however well the rest scores.
+    <a href="/looking-for">Edit the axes</a>.
+  </p>
+
+  {% if fit_rows %}
+  <div class="panel" style="padding:var(--s-4);margin-bottom:0.6rem">
+    <div style="display:flex;gap:var(--s-4);align-items:baseline;flex-wrap:wrap;
+                margin-bottom:var(--s-3)">
+      {% if fit.mean is not none %}
+        <div>
+          <span style="font-size:1.6rem;font-weight:660;letter-spacing:-0.02em">{{ fit.mean }}</span>
+          <span style="font-size:var(--fs-xs);color:var(--muted);margin-left:var(--s-1)">fit</span>
+        </div>
+      {% else %}
+        <div style="font-size:var(--fs-md);font-weight:600;color:var(--muted)">Not rated yet</div>
+      {% endif %}
+      <span style="font-size:var(--fs-2xs);color:var(--neutral)">
+        {{ fit.rated }} of {{ fit.total }} {{ 'axis' if fit.total == 1 else 'axes' }} rated
+      </span>
+      {% if fit.disqualified %}
+        <span style="background:#fef2f2;border:1px solid #fca5a5;color:var(--down);
+                     border-radius:999px;padding:1px var(--s-2);font-size:var(--fs-2xs);
+                     font-weight:600">
+          Disqualified — {{ fit.failing|join(', ') }} below {{ fit.threshold }}
+        </span>
+      {% endif %}
+    </div>
+
+    <form method="post" action="/ui/applications/{{ app_obj.id }}/fit">
+      <div class="form-grid">
+        {% for row in fit_rows %}
+        <div class="field">
+          <label>{{ row.name }}</label>
+          <input type="number" name="crit_{{ row.criterion.id }}"
+                 min="{{ fit_scale_min }}" max="{{ fit_scale_max }}"
+                 value="{{ row.score if row.score is not none else '' }}"
+                 placeholder="—">
+          {% if row.criterion.description %}
+          <p>{{ row.criterion.description }}</p>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <button type="submit" class="btn">Save ratings</button>
+    </form>
+  </div>
+  {% else %}
+  <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.6rem">
+    No axes defined yet — <a href="/looking-for">set them up</a> and this
+    application can be rated against them.
+  </p>
+  {% endif %}
 </div>
 
 <div class="section">

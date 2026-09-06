@@ -213,6 +213,28 @@ score threads by hand; every other feature works identically.
   and your own judgment are for. Requires `ANTHROPIC_API_KEY` to be set; with
   no key the panel simply doesn't appear and nothing else about the app
   changes.
+- **What I'm looking for**: your standing criteria, written down before you're
+  in the room. Six axes you define (talent density, role opportunity, company
+  opportunity, company brand, lifestyle fit, compensation — editable), each
+  rated 1–10 per application by hand. The fit score is the plain average of the
+  ones you've rated.
+
+  This is the second axis the app was missing. Everything else it scores
+  answers *will I win this* — the forecast, the thread reads, the meeting
+  ratings. Fit answers *do I want it*. The pair is the useful thing: a high fit
+  you're unlikely to win is worth fighting for, a low fit you're cruising
+  through is worth closing out.
+
+  Three rules make the number honest. A blank rating stays out of the average
+  rather than counting as zero, and the page always shows how many axes were
+  actually rated. A blank never disqualifies — unknown and failed are opposite
+  claims, and conflating them would disqualify everything the day you wrote the
+  axes. And **a floor beats an average**: any axis below the threshold
+  disqualifies outright, however good the mean, because one glorious axis
+  otherwise pulls a fatal one up out of sight. Nothing here calls a model.
+- **Pain, process and risks**: three free-text fields on each application —
+  what the employer is actually trying to fix, how they decide, and what could
+  kill it. All three reach Ask.
 - **Next steps**: each application carries a free-text next step, shown as one
   line on its board card so the whole pipeline reads as a to-do list rather
   than a status display. It lives on the Application rather than the Posting,

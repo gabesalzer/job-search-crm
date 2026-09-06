@@ -22,6 +22,7 @@ from .. import analytics as analytics_model
 from .. import brief as brief_model
 from .. import chat as chat_model
 from .. import classify
+from .. import fit
 from .. import forecast as forecast_model
 from .. import models
 from .. import thread_read
@@ -787,6 +788,12 @@ def edit_application_page(
         "read_result": read_result,
         "read_enabled": llm.enabled(),
         "classify_result": classify_result,
+        "fit_rows": _fit_rows(app_obj, _criteria(db)),
+        "fit": _fit_for(app_obj, _criteria(db),
+                        _looking_for(db).dq_threshold),
+        "fit_threshold": fit.threshold_of(_looking_for(db).dq_threshold),
+        "fit_scale_min": fit.SCALE_MIN,
+        "fit_scale_max": fit.SCALE_MAX,
         "seniority_values": SENIORITY_VALUES,
         "speciality_values": SPECIALITY_VALUES,
         # How many linked threads a read would actually touch. Drives whether
@@ -973,6 +980,9 @@ def update_application_ui(
     notes: str = Form(""),
     context: str = Form(""),
     next_steps: str = Form(""),
+    pain: str = Form(""),
+    process: str = Form(""),
+    risks: str = Form(""),
     source: str = Form(""),
     manual_forecast: str = Form(""),
     champion: str = Form(""),
@@ -996,6 +1006,9 @@ def update_application_ui(
     app_obj.notes = notes or None
     app_obj.context = context or None
     app_obj.next_steps = next_steps or None
+    app_obj.pain = pain or None
+    app_obj.process = process or None
+    app_obj.risks = risks or None
     # Blank stays NULL rather than defaulting to a source -- "we never recorded
     # how this one started" and "this one was outbound" are different facts,
     # and collapsing them would quietly bias any later source-conversion read.
@@ -2161,6 +2174,9 @@ def _chat_corpus(db: Session, analytics: Optional[dict] = None) -> str:
             "lost_category": a.lost_category.value if a.lost_category else None,
             "context": a.context,
             "next_steps": a.next_steps,
+            "pain": a.pain,
+            "process": a.process,
+            "risks": a.risks,
             "notes": a.notes,
             "resume_label": a.resume.label if a.resume else None,
             "posting": posting,
@@ -2481,3 +2497,192 @@ def insights_ask(request: Request, question: str = Form(""),
 def insights_reset():
     """Drop every filter. One click, no question asked of the model."""
     return RedirectResponse(url="/insights", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# What I'm looking for: standing criteria, and fit against them
+# --------------------------------------------------------------------------- #
+def _looking_for(db: Session) -> models.LookingFor:
+    """The singleton row, created on first read.
+
+    Created lazily rather than seeded at startup, so a fresh database has no
+    row until someone opens the page -- and an empty statement stays
+    distinguishable from one that was never written.
+    """
+    row = db.get(models.LookingFor, 1)
+    if row is None:
+        row = models.LookingFor(id=1)
+        db.add(row)
+        # Seed Gabe's six axes on the very first visit, and only then. The
+        # singleton's existence is the marker, so deleting a criterion later
+        # never resurrects it -- a starter list that grows back is worse than
+        # no starter list, because you cannot tell it to stop.
+        for order, (name, blurb) in enumerate(fit.STARTER_CRITERIA):
+            db.add(models.Criterion(name=name, description=blurb,
+                                    sort_order=order))
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def _criteria(db: Session) -> List[models.Criterion]:
+    return (
+        db.query(models.Criterion)
+        .order_by(models.Criterion.sort_order, models.Criterion.id)
+        .all()
+    )
+
+
+def _fit_rows(app_obj, criteria) -> List[dict]:
+    """One row per criterion for this application, rated or not.
+
+    Every criterion appears even with no rating, because the blanks are the
+    point: they are what tells you the score is over two axes out of seven
+    rather than that the opportunity is thin.
+    """
+    by_id = {r.criterion_id: r for r in app_obj.criterion_ratings}
+    rows = []
+    for crit in criteria:
+        rating = by_id.get(crit.id)
+        rows.append({
+            "criterion": crit,
+            "name": crit.name,
+            "score": rating.score if rating else None,
+            "note": rating.note if rating else None,
+        })
+    return rows
+
+
+def _fit_for(app_obj, criteria, threshold) -> dict:
+    return fit.score(_fit_rows(app_obj, criteria), threshold=threshold)
+
+
+@router.get("/looking-for")
+def looking_for_page(request: Request, db: Session = Depends(get_db)):
+    row = _looking_for(db)
+    criteria = _criteria(db)
+    threshold = fit.threshold_of(row.dq_threshold)
+
+    apps = (
+        db.query(models.JobApplication)
+        .options(
+            selectinload(models.JobApplication.company),
+            selectinload(models.JobApplication.criterion_ratings),
+        )
+        .all()
+    )
+    ranked = fit.rank([
+        {
+            "id": a.id,
+            "company": a.company.name if a.company else None,
+            "title": a.title,
+            "stage": a.stage.value if a.stage else None,
+            "ratings": _fit_rows(a, criteria),
+        }
+        for a in apps
+    ], threshold=threshold)
+
+    return templates.TemplateResponse(request, "looking_for.html", {
+        "active": "looking-for",
+        "looking_for": row,
+        "criteria": criteria,
+        "threshold": threshold,
+        "ranked": ranked,
+        "scale_min": fit.SCALE_MIN,
+        "scale_max": fit.SCALE_MAX,
+    })
+
+
+@router.post("/ui/looking-for")
+def update_looking_for_ui(statement: str = Form(""), dq_threshold: str = Form(""),
+                          db: Session = Depends(get_db)):
+    row = _looking_for(db)
+    row.statement = statement.strip() or None
+    parsed = fit.clamp_score(dq_threshold)
+    # An out-of-scale threshold leaves the stored one alone rather than
+    # snapping to a bound. Silently rewriting it would change which
+    # applications are disqualified without anyone asking for that.
+    if parsed is not None:
+        row.dq_threshold = parsed
+    db.commit()
+    return RedirectResponse(url="/looking-for", status_code=303)
+
+
+@router.post("/ui/looking-for/criteria")
+def create_criterion_ui(name: str = Form(...), description: str = Form(""),
+                        db: Session = Depends(get_db)):
+    name = name.strip()
+    if not name:
+        return RedirectResponse(url="/looking-for", status_code=303)
+    highest = db.query(models.Criterion).count()
+    db.add(models.Criterion(name=name, description=description.strip() or None,
+                            sort_order=highest))
+    db.commit()
+    return RedirectResponse(url="/looking-for", status_code=303)
+
+
+@router.post("/ui/looking-for/criteria/{criterion_id}/edit")
+def update_criterion_ui(criterion_id: int, name: str = Form(...),
+                        description: str = Form(""),
+                        db: Session = Depends(get_db)):
+    crit = _get_or_404(db, models.Criterion, criterion_id)
+    if name.strip():
+        crit.name = name.strip()
+    crit.description = description.strip() or None
+    db.commit()
+    return RedirectResponse(url="/looking-for", status_code=303)
+
+
+@router.post("/ui/looking-for/criteria/{criterion_id}/delete")
+def delete_criterion_ui(criterion_id: int, db: Session = Depends(get_db)):
+    """Deleting a criterion takes its ratings with it.
+
+    Cascade rather than orphan, because a rating means nothing without the
+    axis it was made against -- and leaving them would let a deleted criterion
+    go on affecting an average nobody can see the source of.
+    """
+    crit = _get_or_404(db, models.Criterion, criterion_id)
+    db.delete(crit)
+    db.commit()
+    return RedirectResponse(url="/looking-for", status_code=303)
+
+
+@router.post("/ui/applications/{application_id}/fit")
+async def update_fit_ui(application_id: int, request: Request,
+                        db: Session = Depends(get_db)):
+    """Save this application's ratings against every criterion.
+
+    Async, and the only async route in this file, because the field names are
+    per-criterion (`crit_7`) and cannot be declared as `Form(...)` parameters
+    -- reading them needs the raw form, which is awaitable.
+
+    Its own form rather than part of the main edit post: rating is a different
+    activity from correcting a date, and folding it in would mean a stray
+    submit while editing notes could clear ratings that were not on screen.
+    """
+    app_obj = _get_or_404(db, models.JobApplication, application_id)
+    form = await request.form()
+    existing = {r.criterion_id: r for r in app_obj.criterion_ratings}
+
+    for crit in _criteria(db):
+        raw = form.get("crit_{}".format(crit.id))
+        note = (form.get("note_{}".format(crit.id)) or "").strip() or None
+        value = fit.clamp_score(raw)
+        row = existing.get(crit.id)
+        if value is None and note is None:
+            # Nothing on either side: drop the row rather than storing an empty
+            # one, so "never rated" and "rated then cleared" look the same in
+            # the database as they do on the page.
+            if row is not None:
+                db.delete(row)
+            continue
+        if row is None:
+            row = models.CriterionRating(criterion_id=crit.id,
+                                         application_id=app_obj.id)
+            db.add(row)
+        row.score = value
+        row.note = note
+
+    db.commit()
+    return RedirectResponse(
+        url="/applications/{}/edit".format(application_id), status_code=303)
