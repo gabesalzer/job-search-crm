@@ -179,6 +179,39 @@ def test_deleting_an_axis_takes_its_ratings_with_it():
             "a rating means nothing without the axis it was made against")
 
 
+def test_the_board_shows_fit_beside_the_forecast():
+    """The pair is the point: whether they want you, and whether you want them."""
+    _rate(APP_A, **{"Talent density": 9, "Role opportunity": 8})
+    body = client.get("/board").text
+    assert ">fit<" in body.replace(" ", "").replace("\n", "") or "fit" in body
+    assert "8.5" in body, "the average of the two rated axes"
+
+
+def test_a_disqualified_card_says_so_on_the_board():
+    """The loudest thing a card can say, so it must not hide in the meta row."""
+    _rate(APP_B, **{"Talent density": 8, "Lifestyle fit": 1})
+    body = client.get("/board").text
+    assert "DQ" in body and "Lifestyle fit" in body
+    # And it clears when the failing rating goes.
+    _rate(APP_B, **{"Lifestyle fit": ""})
+    assert "Lifestyle fit</div>" not in client.get("/board").text
+
+
+def test_an_unrated_application_shows_no_fit_at_all():
+    """Blank is blank on the board too -- not a zero, not a placeholder."""
+    with SessionLocal() as db:
+        co = db.query(models.Company).first()
+        fresh = models.JobApplication(company_id=co.id, title="Unrated Role")
+        db.add(fresh)
+        db.commit()
+        fresh_id = fresh.id
+    from app.routers.ui import _criteria as crits, _fit_for, _looking_for
+    with SessionLocal() as db:
+        a = db.get(models.JobApplication, fresh_id)
+        reading = _fit_for(a, crits(db), _looking_for(db).dq_threshold)
+    assert reading["mean"] is None and reading["disqualified"] is False
+
+
 def test_the_tab_ranks_and_sorts_disqualified_last():
     body = client.get("/looking-for").text
     assert "How the pipeline scores" in body

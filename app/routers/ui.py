@@ -674,9 +674,13 @@ def board(request: Request, db: Session = Depends(get_db)):
             selectinload(models.JobApplication.email_threads),
             selectinload(models.JobApplication.resume),
             selectinload(models.JobApplication.job_posting),
+            selectinload(models.JobApplication.criterion_ratings),
         )
         .all()
     )
+    board_criteria = _criteria(db)
+    board_threshold = _looking_for(db).dq_threshold
+
     grouped: dict[str, list] = {s: [] for s in STAGE_VALUES}
     for app_obj in apps:
         grouped.setdefault(app_obj.stage.value, []).append(app_obj)
@@ -693,6 +697,14 @@ def board(request: Request, db: Session = Depends(get_db)):
         # Rides alongside the score because the forecast has no sense of age.
         # Same keying.
         "activity_ages": {a.id: _activity_age(a) for a in apps},
+        # Fit, beside the forecast, because they are the two halves of one
+        # decision: the forecast is whether they want you, fit is whether you
+        # want them. Either alone tells you to spend time on the wrong record —
+        # a high forecast on something you would turn down is the classic way
+        # to lose a month. Criteria are read once for the whole page rather
+        # than per card.
+        "fits": {a.id: _fit_for(a, board_criteria, board_threshold)
+                 for a in apps},
         # The board's stage picker defaults to the same stage the column does.
         # Leaving it on whatever happens to be first in the list would quietly
         # make Staging the default for every new record.

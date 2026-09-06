@@ -85,10 +85,25 @@
         {% endif %}
         {% set fc = forecasts.get(app.id) if forecasts else None %}
         {% set age = activity_ages.get(app.id) if activity_ages else None %}
+        {% set ft = fits.get(app.id) if fits else None %}
+        {# Disqualified is the loudest thing a card can say, so it says it
+           first and on its own row. A pursuit that fails one of your own
+           non-negotiables is not a slightly worse card, and burying it in the
+           meta row beside the resume label would read as trivia. #}
+        {% if ft and ft.disqualified %}
+        <div class="dqrow" title="Below your floor of {{ ft.threshold }} on: {{ ft.failing|join(', ') }}">
+          DQ — {{ ft.failing|join(', ') }}
+        </div>
+        {% endif %}
         {% if fc %}
         <div class="scorerow" title="Forecast — {{ fc.reason }} ({{ fc.confidence }} evidence, scored over {{ fc.components.available }} of 100 points)">
           <span class="score">{{ fc.total_known }}</span>
-          <span class="score-unit">of known</span>
+          <span class="score-unit">forecast</span>
+          {% if ft and ft.mean is not none %}
+          <span class="score fit"
+                title="Your fit, averaged over the {{ ft.rated }} of {{ ft.total }} axes you have rated. Different question from the forecast: this is whether you want them.">{{ ft.mean }}</span>
+          <span class="score-unit">fit</span>
+          {% endif %}
           {% if age is not none %}
           <span class="age {% if age >= 14 %}stale{% endif %}"
                 title="Days since the most recent meeting or email on this application. The forecast itself carries no sense of age, so it rides alongside.">

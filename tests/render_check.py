@@ -526,6 +526,7 @@ cases = [
         "grouped": {"Staging": [], "Qualification": [app_obj], "Discovery": []},
         "forecasts": {app_obj.id: forecast},
         "activity_ages": {app_obj.id: 3},
+        "fits": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
@@ -538,6 +539,7 @@ cases = [
         "grouped": {"Staging": [app_obj], "Qualification": [app_obj]},
         "forecasts": {app_obj.id: forecast_blank},
         "activity_ages": {app_obj.id: 41},
+        "fits": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
@@ -548,7 +550,7 @@ cases = [
     ("board.html (nothing scored)", {
         "active": "board", "stages": ["Staging", "Qualification"],
         "grouped": {"Staging": [app_obj], "Qualification": []},
-        "forecasts": {}, "activity_ages": {}, "default_stage": "Qualification",
+        "forecasts": {}, "activity_ages": {}, "fits": {}, "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
     }),
@@ -560,7 +562,7 @@ cases = [
         "grouped": {"Qualification": [
             SimpleNamespace(**{**app_obj.__dict__, "manual_forecast": None})
         ]},
-        "forecasts": {app_obj.id: forecast_blank}, "activity_ages": {},
+        "forecasts": {app_obj.id: forecast_blank}, "activity_ages": {}, "fits": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
@@ -572,6 +574,7 @@ cases = [
         "grouped": {"Qualification": [app_obj]},
         "activity_ages": {app_obj.id: None},
         "forecasts": {app_obj.id: forecast_commit},
+        "fits": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
@@ -675,6 +678,30 @@ cases = [
         "people": [person], "applications": [app_obj], "selected_person_ids": {person.id},
         "read_error": "", "read_enabled": False, "has_human_rating": False,
     }),
+    # A card carrying both numbers, and one that fails your own floor. The DQ
+    # state is the loudest thing a card can say, so it gets its own case.
+    ("board.html (fit and forecast together)", {
+        "active": "board", "stages": ["Discovery"],
+        "grouped": {"Discovery": [app_obj]},
+        "forecasts": {app_obj.id: forecast},
+        "activity_ages": {app_obj.id: 3},
+        "fits": {app_obj.id: fit_model.score(
+            [{"name": "Comp", "score": 8}, {"name": "Scope", "score": 7}],
+            threshold=4)},
+        "default_stage": "Discovery", "companies": [company],
+        "resumes": [resume], "postings": [posting], "sources": ["Referral"],
+    }),
+    ("board.html (disqualified card)", {
+        "active": "board", "stages": ["Discovery"],
+        "grouped": {"Discovery": [app_obj]},
+        "forecasts": {app_obj.id: forecast},
+        "activity_ages": {app_obj.id: 3},
+        "fits": {app_obj.id: fit_model.score(
+            [{"name": "Comp", "score": 9},
+             {"name": "Lifestyle fit", "score": 2}], threshold=4)},
+        "default_stage": "Discovery", "companies": [company],
+        "resumes": [resume], "postings": [posting], "sources": ["Referral"],
+    }),
     # --- Fit and the Looking For tab ---------------------------------------
     ("looking_for.html", {
         "active": "looking-for",
@@ -730,6 +757,7 @@ cases = [
                                             "next_steps": "Prep the takehome"})],
         },
         "forecasts": {app_obj.id: forecast}, "activity_ages": {app_obj.id: 3},
+        "fits": {},
         "default_stage": "Qualification", "companies": [company],
         "resumes": [resume], "postings": [posting], "sources": ["Referral"],
     }),
@@ -739,7 +767,7 @@ cases = [
         "active": "board", "stages": ["Qualification"],
         "grouped": {"Qualification": [SimpleNamespace(**{**app_obj.__dict__,
                                                         "next_steps": None})]},
-        "forecasts": {}, "activity_ages": {}, "default_stage": "Qualification",
+        "forecasts": {}, "activity_ages": {}, "fits": {}, "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
     }),
