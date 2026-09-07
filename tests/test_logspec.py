@@ -362,10 +362,10 @@ check("an over-long value is refused",
 # This is the load-bearing one: the edit box on the review screen calls this,
 # so anything it lets through is written to the record by a person who trusts
 # the screen in front of them.
+_ui = pathlib.Path(__file__).resolve().parents[1] / "app" / "routers" / "ui"
+_ui_src = "".join(p.read_text() for p in sorted(_ui.glob("*.py")))
 check("the parser and the edit box share this function",
-      "coerce_value" in open(
-          pathlib.Path(__file__).resolve().parents[1]
-          / "app" / "routers" / "ui.py").read())
+      "coerce_value" in _ui_src)
 
 
 # --------------------------------------------------------------------------- #
