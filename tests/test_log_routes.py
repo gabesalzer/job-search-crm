@@ -276,6 +276,55 @@ check("a change to an application that does not exist is dropped",
 
 
 # --------------------------------------------------------------------------- #
+# The expected close date, end to end
+# --------------------------------------------------------------------------- #
+from datetime import datetime, timedelta  # noqa: E402
+
+soon = (datetime.utcnow() + timedelta(days=30)).date().isoformat()
+
+say([{"application": SIERRA, "field": "expected_close_date", "value": soon,
+      "why": "said they would decide in about a month"}])
+entry = submit("Sierra reckon they'll have a decision in about a month.")
+check("a close date is proposed", len(proposal(entry)) == 1)
+check("proposing it does not set it", _field(SIERRA, "expected_close_date") is None)
+
+page = client.get("/log?entry_id={}".format(entry))
+check("the review screen shows the proposed date", soon in page.text)
+
+client.post("/ui/log/{}/apply".format(entry),
+            data={"approve": proposal(entry)[0]["key"]}, follow_redirects=False)
+check("an approved date is written",
+      _field(SIERRA, "expected_close_date").date().isoformat() == soon)
+
+with SessionLocal() as db:
+    rows = db.query(models.CloseDateHistory).filter(
+        models.CloseDateHistory.application_id == SIERRA).all()
+check("a date set by note is logged in the slip history like any other",
+      len(rows) == 1 and rows[0].from_date is None)
+
+later = (datetime.utcnow() + timedelta(days=60)).date().isoformat()
+say([{"application": SIERRA, "field": "expected_close_date", "value": later,
+      "why": "it slipped"}])
+entry = submit("Sierra has slipped again, now looking like two months out.")
+client.post("/ui/log/{}/apply".format(entry),
+            data={"approve": proposal(entry)[0]["key"]}, follow_redirects=False)
+with SessionLocal() as db:
+    rows = db.query(models.CloseDateHistory).filter(
+        models.CloseDateHistory.application_id == SIERRA).all()
+check("a date moved by note records both ends of the move",
+      len(rows) == 2 and rows[1].from_date is not None)
+
+say([{"application": SIERRA, "field": "expected_close_date", "value": "soon"}])
+entry = submit("Sierra said they'd get back to me soon.")
+check("a vague date is not turned into a real one", proposal(entry) == [])
+check("...and the page explains why rather than staying silent",
+      "say the day" in client.get("/log?entry_id={}".format(entry)).text)
+
+check("the packet tells the model what today is",
+      datetime.utcnow().date().isoformat() in str(_reply.get("last_system", "")))
+
+
+# --------------------------------------------------------------------------- #
 # Unmatched is passed through, because it is the most useful thing said
 # --------------------------------------------------------------------------- #
 say([], unmatched=["mentioned a Vercel recruiter — no application on file"])

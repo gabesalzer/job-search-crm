@@ -11,6 +11,7 @@ Run: python3 tests/test_logspec.py
 import json
 import pathlib
 import sys
+from datetime import date
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -44,15 +45,19 @@ APPS = [
 ]
 
 
-def parse(payload):
+TODAY = date(2026, 9, 6)
+
+
+def parse(payload, today=TODAY):
     return logspec.parse(json.dumps(payload), applications=APPS,
-                         stages=STAGES, categories=CATEGORIES)
+                         stages=STAGES, categories=CATEGORIES, today=today)
 
 
 # --------------------------------------------------------------------------- #
 # The prompt is generated from the vocabularies, so it cannot drift
 # --------------------------------------------------------------------------- #
-prompt = logspec.system_prompt(stages=STAGES, categories=CATEGORIES)
+prompt = logspec.system_prompt(stages=STAGES, categories=CATEGORIES,
+                               today=TODAY.isoformat())
 for stage in STAGES:
     check("the prompt offers the stage '{}'".format(stage), stage in prompt)
 for field in logspec.WRITABLE:
@@ -69,6 +74,21 @@ for excluded in ("champion", "score", "manual_forecast", "seniority",
                  "speciality"):
     check("'{}' is not writable from a note".format(excluded),
           excluded not in logspec.WRITABLE)
+
+# Every writable field carries a definition. Without this a field added to
+# WRITABLE ships as a bare name the model has to guess the meaning of, which
+# is the failure that put "comp is light" under `pain` instead of `risks`.
+for field in logspec.WRITABLE:
+    check("'{}' has a definition in the prompt".format(field),
+          bool(logspec.DEFINITIONS.get(field, "").strip()))
+check("the prompt says pain is the employer's problem, not yours",
+      "EMPLOYER" in prompt)
+check("the prompt distinguishes context from a running log",
+      "Not a running log" in prompt)
+check("the prompt says the stages are not interview rounds",
+      "NOT interview rounds" in prompt)
+check("the prompt tells the model what today is", TODAY.isoformat() in prompt)
+check("the prompt demands an exact date format", "YYYY-MM-DD" in prompt)
 
 
 # --------------------------------------------------------------------------- #
@@ -249,6 +269,72 @@ check("a junk entry is dropped without losing the good one alongside it",
 
 
 # --------------------------------------------------------------------------- #
+# Dates: strict, because a plausible wrong one is worse than none
+# --------------------------------------------------------------------------- #
+check("an ISO date parses", logspec.parse_date("2026-10-31") == "2026-10-31")
+check("...and is returned normalised", logspec.parse_date("  2026-10-31 ")
+      == "2026-10-31")
+for bad in ("10/31/26", "31 October 2026", "October 31, 2026", "2026-10",
+            "next Friday", "soon", "2026-13-01", "2026-02-31", "", None, 20261031):
+    check("{!r} is refused rather than guessed at".format(bad),
+          logspec.parse_date(bad) is None)
+
+changes, _, _ = parse({"changes": [
+    {"application": 3, "field": "expected_close_date", "value": "2026-10-31",
+     "why": "said they would decide by the end of October"},
+]})
+check("a good close date survives",
+      len(changes) == 1 and changes[0]["value"] == "2026-10-31")
+check("...as a set, never an append", changes[0]["mode"] == "set")
+
+changes, _, _ = parse({"changes": [
+    {"application": 3, "field": "expected_close_date", "value": "2026-10-31",
+     "mode": "append"},
+]})
+check("appending to a date is corrected to replacing",
+      len(changes) == 1 and changes[0]["mode"] == "set")
+
+changes, _, rejected = parse({"changes": [
+    {"application": 3, "field": "expected_close_date", "value": "soon"},
+]})
+check("a vague date is dropped", changes == [])
+check("...and says a day is needed", "say the day" in rejected[0])
+
+changes, _, rejected = parse({"changes": [
+    {"application": 3, "field": "expected_close_date", "value": "2028-01-01"},
+]})
+check("a date more than a year out is dropped as a likely misread year",
+      changes == [])
+check("...and says so", "misread year" in rejected[0])
+
+changes, _, rejected = parse({"changes": [
+    {"application": 3, "field": "expected_close_date", "value": "2026-01-01"},
+]})
+check("a date well in the past is dropped", changes == [])
+check("...and says an expected close is about what is ahead",
+      "still ahead" in rejected[0])
+
+changes, _, _ = parse({"changes": [
+    {"application": 3, "field": "expected_close_date", "value": "2026-09-01"},
+]})
+check("a date a few days past is allowed — a slipped date is real news",
+      len(changes) == 1)
+
+changes, _, _ = logspec.parse(
+    json.dumps({"changes": [{"application": 3,
+                             "field": "expected_close_date",
+                             "value": "2031-01-01"}]}),
+    applications=APPS, stages=STAGES, categories=CATEGORIES, today=None)
+check("with no today to measure against, only the format is enforced",
+      len(changes) == 1)
+
+changes, _, _ = parse({"changes": [
+    {"application": 3, "field": "expected close date", "value": "2026-10-31"},
+]})
+check("the date field resolves when named with spaces", len(changes) == 1)
+
+
+# --------------------------------------------------------------------------- #
 # The packet
 # --------------------------------------------------------------------------- #
 packet = logspec.build_packet(APPS, "Talked to Todd today.")
@@ -261,6 +347,10 @@ check("the packet carries current values so a restatement is visible",
 check("the packet carries people, since notes name humans",
       "Todd Grant" in packet)
 check("the note itself is in the packet", "Talked to Todd today." in packet)
+dated = logspec.build_packet(
+    [{**APPS[0], "expected_close_date": "2026-10-31"}], "note")
+check("the packet carries the current expected close date, so the model can "
+      "tell a restatement from a move", "2026-10-31" in dated)
 
 long_note = "y" * (logspec.MAX_NOTE_CHARS + 500)
 packet = logspec.build_packet(APPS, long_note)

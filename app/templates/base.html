@@ -170,6 +170,18 @@
      distinguishable at a glance without a legend -- the labels underneath do
      the actual identifying. */
   .card .score.fit{color:var(--accent)}
+  .closeline{font-size:var(--fs-xs);color:var(--muted);margin:var(--s-3) 0 0}
+  .closeline.over{color:var(--down);font-weight:600}
+  .sliplog{margin-top:var(--s-2);font-size:var(--fs-xs)}
+  .sliplog summary{color:var(--muted);cursor:pointer;padding:var(--s-1) 0}
+  .sliplog summary:hover{color:var(--ink)}
+  .sliplog table{border-collapse:collapse;margin-top:var(--s-2)}
+  .sliplog td{padding:2px var(--s-3) 2px 0;vertical-align:top}
+  .sliplog td.when{color:var(--neutral);white-space:nowrap}
+  .sliplog td.moved{color:var(--neutral);font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  .sliplog td.moved.slipped{color:var(--down)}
+  .card .tag.due{color:var(--muted)}
   .card .dqrow{margin-top:var(--s-2);background:#fef2f2;border:1px solid #fca5a5;
     color:var(--down);border-radius:var(--radius-sm);padding:1px var(--s-2);
     font-size:var(--fs-2xs);font-weight:600;white-space:nowrap;overflow:hidden;
@@ -249,8 +261,8 @@
     <a href="/companies" class="{% if active=='companies' %}active{% endif %}">Companies</a>
     <a href="/people" class="{% if active=='people' %}active{% endif %}">People</a>
     <a href="/log" class="{% if active=='log' %}active{% endif %}">Log</a>
-    <a href="/looking-for" class="{% if active=='looking-for' %}active{% endif %}">Looking for</a>
     <a href="/insights" class="{% if active=='insights' %}active{% endif %}">Insights</a>
+    <a href="/settings" class="{% if active=='settings' %}active{% endif %}">Settings</a>
   </nav>
 </header>
 <main>

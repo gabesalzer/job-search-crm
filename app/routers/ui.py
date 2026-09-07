@@ -22,6 +22,7 @@ from .. import analytics as analytics_model
 from .. import brief as brief_model
 from .. import chat as chat_model
 from .. import classify
+from .. import fields as fields_model
 from .. import fit
 from .. import forecast as forecast_model
 from .. import logspec
@@ -484,6 +485,75 @@ def _activity_age(app_obj: models.JobApplication) -> Optional[int]:
     return max((now - max(usable)).days, 0)
 
 
+CLOSED_STAGES = (models.Stage.CLOSED_WON, models.Stage.CLOSED_LOST)
+
+
+def _close_state(app_obj: models.JobApplication) -> dict:
+    """How the expected close date is doing: set, due soon, or past due.
+
+    Kept here rather than in a stdlib-only module, which is a departure worth
+    justifying. The other reasoning modules exist because their logic is worth
+    exercising with literals and because they encode a what-leaves-the-box
+    decision; this is four lines of date arithmetic over one column, and
+    inventing a module for it would buy a hand-written mirror in a test file --
+    exactly the pattern that left `test_applied_analytics.py` proving the
+    behaviour of code that no longer existed. Now that TestClient runs in the
+    sandbox, this is covered by driving the real routes instead.
+
+    `overdue` is only ever True on an *open* application. A closed pursuit that
+    ran past its expected date is not a thing to chase; it is a thing that
+    happened, and colouring it red on a Closed Lost card would be nagging about
+    the past. The date still renders, because "we said June and it closed in
+    September" is worth seeing.
+
+    `days_over` is negative for a date still ahead, so one number carries both
+    directions and the template does not need two.
+
+    Returns `date: None` for an application with no expected date, which is the
+    normal state and must read as "no view formed" rather than as overdue.
+    """
+    due = _naive_utc(app_obj.expected_close_date)
+    if due is None:
+        return {"date": None, "days_over": None, "overdue": False,
+                "closed": app_obj.stage in CLOSED_STAGES, "slips": 0}
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
+    days_over = (today.date() - due.date()).days
+    closed = app_obj.stage in CLOSED_STAGES
+    return {
+        "date": due,
+        "days_over": days_over,
+        "overdue": days_over > 0 and not closed,
+        "closed": closed,
+        # How many times this date has already moved. The count rather than the
+        # rows, because the board wants "slipped twice" and only the edit page
+        # wants the dates themselves.
+        "slips": max(len(app_obj.close_date_history) - 1, 0),
+    }
+
+
+def _close_history(app_obj: models.JobApplication) -> List[dict]:
+    """The slip log, newest first, with each move's size in days.
+
+    The size is computed rather than stored: two dates and subtraction cannot
+    disagree with each other, and a stored delta could.
+    """
+    rows = []
+    for row in sorted(app_obj.close_date_history,
+                      key=lambda r: _naive_utc(r.changed_at) or datetime.min,
+                      reverse=True):
+        moved = None
+        frm, to = _naive_utc(row.from_date), _naive_utc(row.to_date)
+        if frm is not None and to is not None:
+            moved = (to.date() - frm.date()).days
+        rows.append({
+            "changed_at": row.changed_at,
+            "from_date": row.from_date,
+            "to_date": row.to_date,
+            "moved": moved,
+        })
+    return rows
+
+
 def _forecast_for(app_obj: models.JobApplication) -> dict:
     """Gather the six Forecast inputs off an Application.
 
@@ -676,6 +746,7 @@ def board(request: Request, db: Session = Depends(get_db)):
             selectinload(models.JobApplication.resume),
             selectinload(models.JobApplication.job_posting),
             selectinload(models.JobApplication.criterion_ratings),
+            selectinload(models.JobApplication.close_date_history),
         )
         .all()
     )
@@ -706,6 +777,11 @@ def board(request: Request, db: Session = Depends(get_db)):
         # than per card.
         "fits": {a.id: _fit_for(a, board_criteria, board_threshold)
                  for a in apps},
+        # When you expect to know. On the card because the overdue state is the
+        # only reason to put a date somewhere you scan rather than somewhere
+        # you read -- a date you have to open a record to check is a date you
+        # find out about too late.
+        "closes": {a.id: _close_state(a) for a in apps},
         # The board's stage picker defaults to the same stage the column does.
         # Leaving it on whatever happens to be first in the list would quietly
         # make Staging the default for every new record.
@@ -836,6 +912,9 @@ def edit_application_page(
         .all(),
         "activity": _activity_timeline(app_obj),
         "activity_age": _activity_age(app_obj),
+        # When you expect to know, and every time that answer has moved.
+        "close_state": _close_state(app_obj),
+        "close_history": _close_history(app_obj),
         # The two forecasts, side by side and deliberately independent. The
         # automated one is derived here and stored nowhere; the manual one is a
         # column only you write. Where they disagree is the interesting part, so
@@ -987,6 +1066,7 @@ def update_application_ui(
     lost_reason: str = Form(""),
     lost_category: str = Form(""),
     applied_date: str = Form(""),
+    expected_close_date: str = Form(""),
     created_at: str = Form(""),
     last_activity_date: str = Form(""),
     updated_at: str = Form(""),
@@ -1016,6 +1096,9 @@ def update_application_ui(
     app_obj.seniority = models.Seniority(seniority) if seniority else None
     app_obj.speciality = models.Speciality(speciality) if speciality else None
     app_obj.applied_date = _parse_dt(applied_date)
+    # Assigning this fires `_record_close_date_change`, which appends the slip
+    # row. Nothing here has to remember to log it -- see the listener.
+    app_obj.expected_close_date = _parse_dt(expected_close_date)
     app_obj.notes = notes or None
     app_obj.context = context or None
     app_obj.next_steps = next_steps or None
@@ -2570,42 +2653,6 @@ def _fit_for(app_obj, criteria, threshold) -> dict:
     return fit.score(_fit_rows(app_obj, criteria), threshold=threshold)
 
 
-@router.get("/looking-for")
-def looking_for_page(request: Request, db: Session = Depends(get_db)):
-    row = _looking_for(db)
-    criteria = _criteria(db)
-    threshold = fit.threshold_of(row.dq_threshold)
-
-    apps = (
-        db.query(models.JobApplication)
-        .options(
-            selectinload(models.JobApplication.company),
-            selectinload(models.JobApplication.criterion_ratings),
-        )
-        .all()
-    )
-    ranked = fit.rank([
-        {
-            "id": a.id,
-            "company": a.company.name if a.company else None,
-            "title": a.title,
-            "stage": a.stage.value if a.stage else None,
-            "ratings": _fit_rows(a, criteria),
-        }
-        for a in apps
-    ], threshold=threshold)
-
-    return templates.TemplateResponse(request, "looking_for.html", {
-        "active": "looking-for",
-        "looking_for": row,
-        "criteria": criteria,
-        "threshold": threshold,
-        "ranked": ranked,
-        "scale_min": fit.SCALE_MIN,
-        "scale_max": fit.SCALE_MAX,
-    })
-
-
 @router.post("/ui/looking-for")
 def update_looking_for_ui(statement: str = Form(""), dq_threshold: str = Form(""),
                           db: Session = Depends(get_db)):
@@ -2618,7 +2665,7 @@ def update_looking_for_ui(statement: str = Form(""), dq_threshold: str = Form(""
     if parsed is not None:
         row.dq_threshold = parsed
     db.commit()
-    return RedirectResponse(url="/looking-for", status_code=303)
+    return RedirectResponse(url="/settings#looking-for", status_code=303)
 
 
 @router.post("/ui/looking-for/criteria")
@@ -2626,12 +2673,12 @@ def create_criterion_ui(name: str = Form(...), description: str = Form(""),
                         db: Session = Depends(get_db)):
     name = name.strip()
     if not name:
-        return RedirectResponse(url="/looking-for", status_code=303)
+        return RedirectResponse(url="/settings#looking-for", status_code=303)
     highest = db.query(models.Criterion).count()
     db.add(models.Criterion(name=name, description=description.strip() or None,
                             sort_order=highest))
     db.commit()
-    return RedirectResponse(url="/looking-for", status_code=303)
+    return RedirectResponse(url="/settings#looking-for", status_code=303)
 
 
 @router.post("/ui/looking-for/criteria/{criterion_id}/edit")
@@ -2643,7 +2690,7 @@ def update_criterion_ui(criterion_id: int, name: str = Form(...),
         crit.name = name.strip()
     crit.description = description.strip() or None
     db.commit()
-    return RedirectResponse(url="/looking-for", status_code=303)
+    return RedirectResponse(url="/settings#looking-for", status_code=303)
 
 
 @router.post("/ui/looking-for/criteria/{criterion_id}/delete")
@@ -2657,7 +2704,7 @@ def delete_criterion_ui(criterion_id: int, db: Session = Depends(get_db)):
     crit = _get_or_404(db, models.Criterion, criterion_id)
     db.delete(crit)
     db.commit()
-    return RedirectResponse(url="/looking-for", status_code=303)
+    return RedirectResponse(url="/settings#looking-for", status_code=303)
 
 
 @router.post("/ui/applications/{application_id}/fit")
@@ -2743,6 +2790,9 @@ def _log_applications(db: Session) -> List[dict]:
         }
         for field in logspec.TEXT_FIELDS:
             row[field] = getattr(app_obj, field, None)
+        for field in logspec.DATE_FIELDS:
+            value = _naive_utc(getattr(app_obj, field, None))
+            row[field] = value.date().isoformat() if value else None
         rows.append(row)
     return rows
 
@@ -2774,11 +2824,18 @@ def _propose_from_note(db: Session, note: str, *, origin: str
         db.commit()
         return entry
 
+    # One `today` for the whole read, used for both the prompt and the sanity
+    # check, so a note submitted across midnight cannot be told one date and
+    # validated against another.
+    today = datetime.now(timezone.utc).date()
+
     usage: dict = {}
     try:
         text, model_used = llm.generate(
             logspec.system_prompt(stages=STAGE_ORDER_VALUES,
-                                  categories=LOST_CATEGORY_VALUES),
+                                  categories=LOST_CATEGORY_VALUES,
+                                  today=today.isoformat(),
+                                  definitions=_definition_overrides(db)),
             logspec.build_messages(logspec.build_packet(apps, note)),
             max_tokens=logspec.MAX_TOKENS,
             timeout=90,
@@ -2797,7 +2854,7 @@ def _propose_from_note(db: Session, note: str, *, origin: str
     prose, block = logspec.extract_block(text)
     changes, unmatched, rejected = logspec.parse(
         block, applications=apps, stages=STAGE_ORDER_VALUES,
-        categories=LOST_CATEGORY_VALUES)
+        categories=LOST_CATEGORY_VALUES, today=today)
 
     entry.prose = prose or None
     entry.proposal = json.dumps(changes)
@@ -2845,6 +2902,10 @@ def _apply_changes(db: Session, entry: models.LogEntry,
             app_obj.stage = models.Stage(value)
         elif field == "lost_category":
             app_obj.lost_category = models.LostCategory(value)
+        elif field in logspec.DATE_FIELDS:
+            # Assigning this fires the history listener exactly as a hand edit
+            # does, so a date moved by voice is logged like any other.
+            setattr(app_obj, field, datetime.strptime(value, "%Y-%m-%d"))
         else:
             setattr(app_obj, field,
                     logspec.merged_value(getattr(app_obj, field), value, mode))
@@ -2952,3 +3013,127 @@ def log_delete(entry_id: int, db: Session = Depends(get_db)):
     db.delete(entry)
     db.commit()
     return RedirectResponse(url="/log", status_code=303)
+
+
+
+# --------------------------------------------------------------------------- #
+# Settings: what the fields mean, and what you are looking for
+# --------------------------------------------------------------------------- #
+def _definition_overrides(db: Session) -> dict:
+    """Your edited definitions, keyed by field. Absent fields use the default."""
+    return {
+        row.field: row.definition
+        for row in db.query(models.FieldDefinition).all()
+        if (row.definition or "").strip()
+    }
+
+
+def _definition_rows(db: Session) -> List[dict]:
+    return fields_model.rows(overrides=_definition_overrides(db),
+                             writable=logspec.WRITABLE)
+
+
+def _settings_context(db: Session, **extra) -> dict:
+    """Everything both halves of the page need.
+
+    The Looking For half is unchanged and still reads through `_looking_for`
+    and `_criteria`; folding the page in was a template move, not a rewrite,
+    which is why its routes keep their `/ui/looking-for/...` paths. Renaming
+    working form endpoints to match a nav change would be churn with a
+    regression attached.
+    """
+    row = _looking_for(db)
+    criteria = _criteria(db)
+    threshold = fit.threshold_of(row.dq_threshold)
+    apps = (
+        db.query(models.JobApplication)
+        .options(selectinload(models.JobApplication.criterion_ratings),
+                 selectinload(models.JobApplication.company))
+        .all()
+    )
+    context = {
+        "active": "settings",
+        "definition_rows": _definition_rows(db),
+        "definition_groups": fields_model.groups(),
+        "writers": fields_model.WRITERS,
+        "looking_for": row,
+        "criteria": criteria,
+        "threshold": threshold,
+        "scale_min": fit.SCALE_MIN,
+        "scale_max": fit.SCALE_MAX,
+        "ranked": fit.rank([
+            {"id": a.id,
+             "company": a.company.name if a.company else None,
+             "title": a.title,
+             "stage": a.stage.value if a.stage else None,
+             "ratings": _fit_rows(a, criteria)}
+            for a in apps
+        ], threshold=threshold),
+        "saved": "",
+    }
+    context.update(extra)
+    return context
+
+
+@router.get("/settings")
+def settings_page(request: Request, saved: str = "",
+                  db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        request, "settings.html", _settings_context(db, saved=saved))
+
+
+@router.get("/looking-for")
+def looking_for_redirect():
+    """Folded into Settings. Redirect rather than delete: this URL was in the
+    nav for weeks and is in his history."""
+    return RedirectResponse(url="/settings#looking-for", status_code=301)
+
+
+@router.post("/ui/settings/definitions/{field}")
+def update_definition_ui(field: str, definition: str = Form(""),
+                         db: Session = Depends(get_db)):
+    """Save your wording for one field, or clear it back to the default.
+
+    A blank submission deletes the override rather than storing an empty
+    string. An empty definition is worse than the shipped one -- it would
+    hand the model a bare field name and this page a blank row -- so the only
+    thing "empty" can sensibly mean here is "use the default".
+    """
+    if field not in fields_model.BY_FIELD:
+        raise HTTPException(404, "no such field")
+    row = (db.query(models.FieldDefinition)
+           .filter(models.FieldDefinition.field == field).first())
+    text = (definition or "").strip()
+    default = fields_model.default_definition(field)
+    if not text or text == default:
+        # Matching the default exactly is also a reset. Storing it would be a
+        # row that pins today's wording and silently stops tracking a better
+        # one shipped later.
+        if row is not None:
+            db.delete(row)
+        db.commit()
+        return RedirectResponse(
+            url="/settings?saved={}#definitions".format(quote(field)),
+            status_code=303)
+    if row is None:
+        row = models.FieldDefinition(field=field)
+        db.add(row)
+    row.definition = text
+    db.commit()
+    return RedirectResponse(
+        url="/settings?saved={}#definitions".format(quote(field)),
+        status_code=303)
+
+
+@router.post("/ui/settings/definitions/{field}/reset")
+def reset_definition_ui(field: str, db: Session = Depends(get_db)):
+    if field not in fields_model.BY_FIELD:
+        raise HTTPException(404, "no such field")
+    row = (db.query(models.FieldDefinition)
+           .filter(models.FieldDefinition.field == field).first())
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return RedirectResponse(
+        url="/settings?saved={}#definitions".format(quote(field)),
+        status_code=303)

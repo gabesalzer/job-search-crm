@@ -277,6 +277,23 @@ SENIORITY_FIXTURE = classify_model.SENIORITY_VALUES
 SPECIALITY_FIXTURE = classify_model.SPECIALITY_VALUES
 
 from app import fit as fit_model  # noqa: E402
+from app import fields as fields_model  # noqa: E402
+from app import logspec as logspec_model  # noqa: E402
+
+# The Settings page's own half. Built from the real catalogue rather than from
+# literals, so a field added there is rendered by this check on the next run
+# without anyone remembering to add a fixture -- which is the whole reason the
+# catalogue is one list in one place.
+SETTINGS_BASE = {
+    "active": "settings",
+    "definition_rows": fields_model.rows(writable=logspec_model.WRITABLE),
+    "definition_groups": fields_model.groups(),
+    "writers": fields_model.WRITERS,
+    "looking_for": SimpleNamespace(statement=None, dq_threshold=4),
+    "criteria": [], "threshold": 4, "ranked": [],
+    "scale_min": fit_model.SCALE_MIN, "scale_max": fit_model.SCALE_MAX,
+    "saved": "",
+}
 
 # Built from the real module, like the forecast fixtures, so the template is
 # smoke-tested against the shape the app actually emits.
@@ -310,7 +327,29 @@ APP_EDIT_BASE = {
     "fit_threshold": 4, "fit_scale_min": 1, "fit_scale_max": 10,
     "seniority_values": SENIORITY_FIXTURE,
     "speciality_values": SPECIALITY_FIXTURE,
+    # No expected close date is the normal state and must render as silence,
+    # not as overdue.
+    "close_state": {"date": None, "days_over": None, "overdue": False,
+                    "closed": False, "slips": 0},
+    "close_history": [],
 }
+
+CLOSE_OVERDUE = {"date": datetime(2026, 8, 20), "days_over": 17,
+                 "overdue": True, "closed": False, "slips": 2}
+CLOSE_AHEAD = {"date": datetime(2026, 10, 31), "days_over": -55,
+               "overdue": False, "closed": False, "slips": 0}
+CLOSE_TODAY = {"date": datetime(2026, 9, 6), "days_over": 0, "overdue": False,
+               "closed": False, "slips": 1}
+CLOSE_DONE = {"date": datetime(2026, 6, 30), "days_over": 68, "overdue": False,
+              "closed": True, "slips": 3}
+CLOSE_SLIPS = [
+    {"changed_at": datetime(2026, 8, 1), "from_date": datetime(2026, 7, 31),
+     "to_date": datetime(2026, 9, 30), "moved": 61},
+    {"changed_at": datetime(2026, 7, 2), "from_date": datetime(2026, 6, 30),
+     "to_date": datetime(2026, 7, 31), "moved": 31},
+    {"changed_at": datetime(2026, 6, 1), "from_date": None,
+     "to_date": datetime(2026, 6, 30), "moved": None},
+]
 
 INSIGHTS_BASE = {
     "active": "insights", "stage_order": ANALYTICS_STAGES,
@@ -547,7 +586,7 @@ cases = [
         "grouped": {"Staging": [], "Qualification": [app_obj], "Discovery": []},
         "forecasts": {app_obj.id: forecast},
         "activity_ages": {app_obj.id: 3},
-        "fits": {},
+        "fits": {}, "closes": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral", "Recruiter Inbound", "Outbound"],
@@ -560,7 +599,7 @@ cases = [
         "grouped": {"Staging": [app_obj], "Qualification": [app_obj]},
         "forecasts": {app_obj.id: forecast_blank},
         "activity_ages": {app_obj.id: 41},
-        "fits": {},
+        "fits": {}, "closes": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
@@ -595,7 +634,7 @@ cases = [
         "grouped": {"Qualification": [app_obj]},
         "activity_ages": {app_obj.id: None},
         "forecasts": {app_obj.id: forecast_commit},
-        "fits": {},
+        "fits": {}, "closes": {},
         "default_stage": "Qualification",
         "companies": [company], "resumes": [resume], "postings": [posting],
         "sources": ["Referral"],
@@ -723,14 +762,13 @@ cases = [
         "default_stage": "Discovery", "companies": [company],
         "resumes": [resume], "postings": [posting], "sources": ["Referral"],
     }),
-    # --- Fit and the Looking For tab ---------------------------------------
-    ("looking_for.html", {
-        "active": "looking-for",
+    # --- Settings: field definitions, and the folded Looking For -----------
+    ("settings.html", {
+        **SETTINGS_BASE,
         "looking_for": SimpleNamespace(
             statement="Systems and strategy, Series B or later, remote.",
             dq_threshold=4),
         "criteria": CRITERIA_FIXTURE, "threshold": 4,
-        "scale_min": 1, "scale_max": 10,
         "ranked": fit_model.rank([
             {"id": 4, "company": "Condor", "title": "VP RevOps",
              "stage": "Discovery", "ratings": FIT_ROWS},
@@ -741,11 +779,19 @@ cases = [
     }),
     # No axes defined and nothing to rank -- what a fresh database renders
     # before the seed, and after deleting every axis.
-    ("looking_for.html (no axes yet)", {
-        "active": "looking-for",
+    ("settings.html (no axes yet)", {
+        **SETTINGS_BASE,
         "looking_for": SimpleNamespace(statement=None, dq_threshold=None),
-        "criteria": [], "threshold": 4, "scale_min": 1, "scale_max": 10,
-        "ranked": [],
+        "criteria": [], "threshold": 4, "ranked": [],
+    }),
+    # A definition you have rewritten: the row has to show your wording, mark
+    # it as yours, and still carry the shipped one so a reset has a target.
+    ("settings.html (a definition edited)", {
+        **SETTINGS_BASE,
+        "definition_rows": fields_model.rows(
+            overrides={"pain": "Only what the employer is trying to fix.",
+                       "champion": "My own note, which the model never sees."},
+            writable=logspec_model.WRITABLE),
     }),
     # Disqualified, and part-rated at the same time.
     ("application_edit.html (fit, disqualified)", {
@@ -778,7 +824,7 @@ cases = [
                                             "next_steps": "Prep the takehome"})],
         },
         "forecasts": {app_obj.id: forecast}, "activity_ages": {app_obj.id: 3},
-        "fits": {},
+        "fits": {}, "closes": {},
         "default_stage": "Qualification", "companies": [company],
         "resumes": [resume], "postings": [posting], "sources": ["Referral"],
     }),
@@ -1035,6 +1081,58 @@ cases = [
     ("log.html (applied and errored)", {
         **LOG_BASE, "applied": "Condor (stage, next steps)",
         "error": "API returned 500: overloaded_error",
+    }),
+    # --- Expected close date -------------------------------------------------
+    # Past due and already slipped twice: the loudest state, and the reason the
+    # field is on the card at all.
+    ("application_edit.html (close date overdue)", {
+        **APP_EDIT_BASE, "app_obj": app_obj,
+        "close_state": CLOSE_OVERDUE, "close_history": CLOSE_SLIPS,
+    }),
+    # Still ahead, never moved: must read as information, not as a warning.
+    ("application_edit.html (close date ahead)", {
+        **APP_EDIT_BASE, "app_obj": app_obj, "close_state": CLOSE_AHEAD,
+        "close_history": [CLOSE_SLIPS[-1]],
+    }),
+    # Landing today. The plural-handling case: "0 days out" would be wrong.
+    ("application_edit.html (close date today)", {
+        **APP_EDIT_BASE, "app_obj": app_obj, "close_state": CLOSE_TODAY,
+        "close_history": [CLOSE_SLIPS[-1]],
+    }),
+    # Closed after running past its date: shown, never nagged about.
+    ("application_edit.html (close date, since closed)", {
+        **APP_EDIT_BASE, "app_obj": app_obj, "close_state": CLOSE_DONE,
+        "close_history": CLOSE_SLIPS,
+    }),
+    # A date that was set and then cleared -- to_date is NULL, which the slip
+    # table has to render as words rather than as a blank cell.
+    ("application_edit.html (close date cleared)", {
+        **APP_EDIT_BASE, "app_obj": app_obj,
+        "close_state": {"date": None, "days_over": None, "overdue": False,
+                        "closed": False, "slips": 1},
+        "close_history": [
+            {"changed_at": datetime(2026, 8, 9), "from_date": datetime(2026, 9, 30),
+             "to_date": None, "moved": None},
+            CLOSE_SLIPS[-1],
+        ],
+    }),
+    # The card, overdue: the marker rides in the score row beside the age.
+    ("board.html (close date overdue)", {
+        "active": "board", "stages": ["Qualification", "Discovery"],
+        "grouped": {"Qualification": [app_obj], "Discovery": []},
+        "forecasts": {app_obj.id: forecast}, "activity_ages": {app_obj.id: 3},
+        "fits": {}, "closes": {app_obj.id: CLOSE_OVERDUE},
+        "default_stage": "Qualification", "companies": [company],
+        "resumes": [resume], "postings": [posting], "sources": ["Referral"],
+    }),
+    # The card, still ahead: a quiet tag on the meta row, no colour.
+    ("board.html (close date ahead)", {
+        "active": "board", "stages": ["Qualification", "Discovery"],
+        "grouped": {"Qualification": [app_obj], "Discovery": []},
+        "forecasts": {app_obj.id: forecast}, "activity_ages": {app_obj.id: 3},
+        "fits": {}, "closes": {app_obj.id: CLOSE_AHEAD},
+        "default_stage": "Qualification", "companies": [company],
+        "resumes": [resume], "postings": [posting], "sources": ["Referral"],
     }),
 ]
 

@@ -104,6 +104,16 @@
                 title="Your fit, averaged over the {{ ft.rated }} of {{ ft.total }} axes you have rated. Different question from the forecast: this is whether you want them.">{{ ft.mean }}</span>
           <span class="score-unit">fit</span>
           {% endif %}
+          {% set cs = closes.get(app.id) if closes else None %}
+          {# Only an overdue date earns a place in the score row. A date still
+             ahead is not news and would compete with the numbers you came here
+             to read; the plain date lives on the meta row below. #}
+          {% if cs and cs.overdue %}
+          <span class="age stale"
+                title="Expected to close {{ cs.date.strftime('%b %-d, %Y') }}{% if cs.slips %}, after moving {{ cs.slips }} time{{ '' if cs.slips == 1 else 's' }}{% endif %}. Still open.">
+            {{ cs.days_over }}d over
+          </span>
+          {% endif %}
           {% if age is not none %}
           <span class="age {% if age >= 14 %}stale{% endif %}"
                 title="Days since the most recent meeting or email on this application. The forecast itself carries no sense of age, so it rides alongside.">
@@ -116,6 +126,12 @@
                 title="Automated Forecast — {{ fc.reason }} ({{ fc.confidence }} evidence)">{{ fc.category }}</span>
           {% if fc.confidence in ("none", "thin") %}
           <span class="tag" title="Not enough behind this number to lean on it. Rate a meeting or an email thread to give it something to read.">{{ fc.confidence }} evidence</span>
+          {% endif %}
+          {% if cs and cs.date and not cs.overdue and not cs.closed %}
+          <span class="tag due"
+                title="When you expect to know either way{% if cs.slips %} — moved {{ cs.slips }} time{{ '' if cs.slips == 1 else 's' }} already{% endif %}.">
+            by {{ cs.date.strftime('%b %-d') }}
+          </span>
           {% endif %}
           {% if app.manual_forecast and app.manual_forecast.value != fc.category %}
           <span class="fc fc-manual" title="Your manual forecast, which disagrees with the automated one">≠ {{ app.manual_forecast.value }}</span>

@@ -482,6 +482,26 @@ class JobApplication(Base):
     applied_date = Column(DateTime)
     last_activity_date = Column(DateTime, default=_utcnow)
 
+    # When you expect to *know* — the sales Close Date, and deliberately the
+    # expected one rather than the actual one.
+    #
+    # The actual close date is already exact and is not stored: StageHistory
+    # timestamps the move into Closed Won or Closed Lost, and `analytics.py`
+    # reads it from there for the applied-to-close interval. A stored copy
+    # could disagree with the history that produced it, with no way to tell
+    # which was right — the same reasoning that keeps the forecast derived.
+    #
+    # This one cannot be derived from anything, because it is a judgment about
+    # the future rather than a record of the past. That is also what makes it
+    # worth having: it is the only field in the schema that lets "what is
+    # slipping" be a question with an answer.
+    #
+    # Nullable, and blank means "no view formed" rather than "no deadline".
+    # Most applications should be blank most of the time; a date invented to
+    # fill the column would be indistinguishable from one an employer actually
+    # gave you, and it is the second kind that makes the field useful.
+    expected_close_date = Column(DateTime)
+
     # How the application originated (see ApplicationSource). Nullable.
     source = Column(Enum(ApplicationSource), index=True)
 
@@ -621,6 +641,15 @@ class JobApplication(Base):
     job_posting = relationship("JobPosting", back_populates="applications")
     resume = relationship("Resume", back_populates="applications")
 
+    # Master-detail child: every time the expected close date moved. Same
+    # shape and same cascade as the funnel history below, for the same reason.
+    close_date_history = relationship(
+        "CloseDateHistory",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="CloseDateHistory.changed_at",
+    )
+
     # Master-detail child: cascade delete the funnel history with the app.
     stage_history = relationship(
         "StageHistory",
@@ -666,6 +695,54 @@ class StageHistory(Base):
     changed_at = Column(DateTime, default=_utcnow, index=True)
 
     application = relationship("JobApplication", back_populates="stage_history")
+
+
+# --------------------------------------------------------------------------- #
+# Close Date History: append-only log of a date that moved
+# --------------------------------------------------------------------------- #
+class CloseDateHistory(Base):
+    """Every change to an application's expected close date.
+
+    Exists because a pursuit that keeps moving its own date is telling you
+    something, and a single overwritable column erases exactly that. "Expected
+    to close in June" is a fact about last month; "expected June, then July,
+    then September" is a fact about the pursuit, and it is the more useful of
+    the two. The current value alone cannot distinguish a date you set
+    confidently last week from one you have quietly pushed out three times.
+
+    Written by an attribute listener rather than by the routes, mirroring
+    `_record_stage_change`. That is what makes it complete: the date can be set
+    from the edit form, from an approved voice note, or from a script, and none
+    of them has to remember to log it.
+
+    `to_date` is nullable, which is where this differs from StageHistory.
+    A stage cannot be cleared; a close date can, and "I no longer have a view
+    on this" is a real change worth recording rather than a gap in the log.
+    A row with both ends NULL cannot occur -- the listener ignores a set that
+    does not change the value.
+
+    Nothing derives from this table. It is read by a person looking at one
+    application, and deliberately does not feed the forecast: a slipping date
+    is evidence, but turning it into points would make the honest act of
+    updating the date cost you score, which is how a field stops being kept
+    current.
+    """
+
+    __tablename__ = "close_date_history"
+
+    id = Column(Integer, primary_key=True)
+    application_id = Column(
+        Integer,
+        ForeignKey("job_applications.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    from_date = Column(DateTime)   # NULL on the first date ever set
+    to_date = Column(DateTime)     # NULL when the date was cleared
+    changed_at = Column(DateTime, default=_utcnow, index=True)
+
+    application = relationship("JobApplication",
+                               back_populates="close_date_history")
 
 
 # --------------------------------------------------------------------------- #
@@ -1018,6 +1095,44 @@ class LogEntry(Base):
     resolved_at = Column(DateTime)
 
 
+class FieldDefinition(Base):
+    """Your wording for what a field means, where it differs from the shipped one.
+
+    Overrides only. A field you have never edited has no row here, and its
+    meaning comes from `fields.CATALOGUE` in code. Three things follow from
+    storing it that way rather than seeding a row per field:
+
+    * **Reset is a delete.** No "is this still the default?" comparison to get
+      wrong, and no way to end up with a row that merely looks like the
+      default while the code has moved on.
+    * **A new field needs no migration.** Add it to the catalogue and it
+      appears on the Settings page with its shipped definition, already
+      correct.
+    * **Improvements to the shipped wording reach you.** A field you never
+      touched picks up a better default on deploy; one you did touch keeps
+      your words, which is the right precedence in both directions.
+
+    This is the same shape as the provenance columns elsewhere in the schema
+    (`rating_source`, `classification_source`): absence means nobody has
+    claimed the field, and that is a distinct state from any value.
+
+    For the ten fields the Log can write, editing a definition changes what the
+    model is told on the very next note. For the rest it is documentation --
+    the Settings page says which is which, because a page where half the edits
+    silently do nothing is a page that lies.
+    """
+
+    __tablename__ = "field_definitions"
+
+    id = Column(Integer, primary_key=True)
+    # The column name on JobApplication, matching a `field` in fields.CATALOGUE.
+    # Not a ForeignKey to anything -- the catalogue lives in code, and a field
+    # dropped from it leaves an orphan row here that is simply never read.
+    field = Column(String(64), nullable=False, index=True)
+    definition = Column(Text)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
 class LookingFor(Base):
     """Your standing statement of what you want, and the disqualifying floor.
 
@@ -1131,4 +1246,28 @@ def _record_stage_change(target: JobApplication, value, oldvalue, initiator):
     old = oldvalue if isinstance(oldvalue, Stage) else None
     target.stage_history.append(
         StageHistory(from_stage=old, to_stage=value, changed_at=_utcnow())
+    )
+
+
+@event.listens_for(JobApplication.expected_close_date, "set", active_history=True)
+def _record_close_date_change(target: JobApplication, value, oldvalue, initiator):
+    """Queue a CloseDateHistory row whenever the expected close date moves.
+
+    Deliberately a listener rather than route code, exactly like the stage
+    equivalent: the date can be set from the edit form, from an approved voice
+    note, or from a shell script, and a log that depends on each writer
+    remembering to append to it is a log with holes in it.
+
+    `active_history` forces a load of the previous value before the set, which
+    is what makes `oldvalue` trustworthy. On the first assignment SQLAlchemy
+    passes a sentinel rather than None, so anything that is not a datetime is
+    treated as "no previous date" and `from_date` stays NULL.
+    """
+    old = oldvalue if isinstance(oldvalue, datetime) else None
+    if value == old:
+        return          # a save that re-submitted the same date is not a move
+    if value is None and old is None:
+        return          # setting blank on a record that was already blank
+    target.close_date_history.append(
+        CloseDateHistory(from_date=old, to_date=value, changed_at=_utcnow())
     )

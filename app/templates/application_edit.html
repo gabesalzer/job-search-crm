@@ -124,22 +124,68 @@
       </p>
       <div class="form-grid">
         {% for f in [
-          ("applied_date", "Applied", app_obj.applied_date, "When the application actually went in. Blank for roles that came to you."),
-          ("created_at", "Created", app_obj.created_at, "When this record was first added here."),
-          ("last_activity_date", "Last activity", app_obj.last_activity_date, "Auto-stamped on a stage change; an edit here wins."),
-          ("updated_at", "Updated", app_obj.updated_at, "Re-stamped on save unless you change it by hand."),
+          ("applied_date", "Applied", app_obj.applied_date, "When the application actually went in. Blank for roles that came to you.", "datetime-local"),
+          ("expected_close_date", "Expected close", app_obj.expected_close_date, "When you expect to know either way. Blank means no view formed — a date invented to fill this reads exactly like one they gave you.", "date"),
+          ("created_at", "Created", app_obj.created_at, "When this record was first added here.", "datetime-local"),
+          ("last_activity_date", "Last activity", app_obj.last_activity_date, "Auto-stamped on a stage change; an edit here wins.", "datetime-local"),
+          ("updated_at", "Updated", app_obj.updated_at, "Re-stamped on save unless you change it by hand.", "datetime-local"),
         ] %}
         <div class="field">
           <label>
             {{ f[1] }}
             {% if not f[2] %}<span style="color:var(--neutral);font-weight:400"> — not set</span>{% endif %}
           </label>
-          <input name="{{ f[0] }}" type="datetime-local"
-                 value="{{ f[2].strftime('%Y-%m-%dT%H:%M') if f[2] else '' }}">
+          <input name="{{ f[0] }}" type="{{ f[4] }}"
+                 value="{{ (f[2].strftime('%Y-%m-%d') if f[4] == 'date' else f[2].strftime('%Y-%m-%dT%H:%M')) if f[2] else '' }}">
           <p style="font-size:0.7rem;color:var(--neutral);margin:0.2rem 0 0">{{ f[3] }}</p>
         </div>
         {% endfor %}
       </div>
+
+      {% if close_state and close_state.date %}
+      <p class="closeline {% if close_state.overdue %}over{% endif %}"
+         title="Expected close is the only field here that is a judgment about the future rather than a record of the past.">
+        {% if close_state.overdue %}
+          Past due by {{ close_state.days_over }} day{{ '' if close_state.days_over == 1 else 's' }}
+          and still open.
+        {% elif close_state.closed %}
+          Closed. Expected {{ close_state.date.strftime('%b %-d, %Y') }}.
+        {% elif close_state.days_over == 0 %}
+          Due today.
+        {% else %}
+          {{ -close_state.days_over }} day{{ '' if close_state.days_over == -1 else 's' }} out.
+        {% endif %}
+        {% if close_state.slips %}
+          Moved {{ close_state.slips }} time{{ '' if close_state.slips == 1 else 's' }}.
+        {% endif %}
+      </p>
+      {% endif %}
+
+      {% if close_history and close_history|length > 1 %}
+      <details class="sliplog">
+        <summary>Where this date has been ({{ close_history|length }} changes)</summary>
+        <table>
+          <tbody>
+          {% for h in close_history %}
+            <tr>
+              <td class="when">{{ h.changed_at.strftime('%b %-d') if h.changed_at else '—' }}</td>
+              <td>
+                {% if h.from_date %}{{ h.from_date.strftime('%b %-d, %Y') }}{% else %}not set{% endif %}
+                &rarr;
+                {% if h.to_date %}{{ h.to_date.strftime('%b %-d, %Y') }}{% else %}cleared{% endif %}
+              </td>
+              <td class="moved {% if h.moved is not none and h.moved > 0 %}slipped{% endif %}"
+                  title="{% if h.moved is not none and h.moved > 0 %}Pushed out{% elif h.moved %}Pulled forward{% endif %}">
+                {% if h.moved is not none and h.moved != 0 %}
+                  {{ '+' if h.moved > 0 else '' }}{{ h.moved }}d
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </details>
+      {% endif %}
     </div>
 
     <div class="field" style="margin-top:0.5rem">

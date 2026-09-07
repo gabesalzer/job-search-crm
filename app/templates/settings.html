@@ -1,13 +1,56 @@
 {% extends "base.html" %}
-{% block title %}What I'm looking for · Job Search CRM{% endblock %}
+{% block title %}Settings · Job Search CRM{% endblock %}
 {% block body %}
 <style>
-  .lfcol{max-width:var(--w-edit);margin:0 auto}
-  .lf-sec{margin-bottom:var(--s-7)}
-  .lf-sec h2{font-size:var(--fs-lg);font-weight:620;margin:0 0 var(--s-1);
+  .setcol{max-width:var(--w-edit);margin:0 auto}
+  .section-band{border-top:2px solid var(--line-strong);margin:var(--s-7) 0 var(--s-5);
+    padding-top:var(--s-5);
+    /* The topbar is sticky at 52px, so an anchor jump would otherwise park
+       the heading underneath it. /looking-for redirects straight to
+       #looking-for, which makes this the common path rather than an edge. */
+    scroll-margin-top:68px}
+  .section-band:first-of-type{border-top:none;margin-top:var(--s-5);padding-top:0}
+  .section-band > h2{font-size:var(--fs-xl);font-weight:680;margin:0 0 var(--s-2);
+    letter-spacing:-0.015em}
+  .section-band > .lede{color:var(--muted);font-size:var(--fs-sm);
+    margin:0 0 var(--s-5);max-width:var(--w-prose)}
+  .set-sec{margin-bottom:var(--s-7)}
+  .set-sec h3{font-size:var(--fs-lg);font-weight:620;margin:0 0 var(--s-1);
     letter-spacing:-0.01em}
-  .lf-sec .note{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s-4);
+  .set-sec .note{color:var(--muted);font-size:var(--fs-sm);margin:0 0 var(--s-4);
     max-width:var(--w-prose)}
+  .grp{margin-bottom:var(--s-6)}
+  .grp > h4{font-size:var(--fs-2xs);font-weight:700;text-transform:uppercase;
+    letter-spacing:0.06em;color:var(--muted);margin:0 0 var(--s-3);
+    padding-bottom:var(--s-2);border-bottom:1px solid var(--line)}
+  .fdef{scroll-margin-top:68px;background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--radius-lg);padding:var(--s-3) var(--s-4);
+    margin-bottom:var(--s-3);box-shadow:var(--shadow-sm)}
+  .fdef .head{display:flex;gap:var(--s-3);align-items:baseline;flex-wrap:wrap;
+    margin-bottom:var(--s-2)}
+  .fdef .name{font-weight:640;font-size:var(--fs-sm)}
+  /* Not `.col`: that is the board's Kanban column class in base.html, and
+     reusing the name here inherited a 264px bordered box that read as an
+     empty text input sitting next to every field name. */
+  .fdef .colname{color:var(--neutral);font-size:var(--fs-2xs);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .fdef .flags{margin-left:auto;display:flex;gap:var(--s-2);align-items:center}
+  .fdef .def{margin:0;font-size:var(--fs-sm);max-width:var(--w-prose)}
+  .fdef .editor{margin-top:var(--s-2)}
+  .fdef .editor summary{color:var(--muted);font-size:var(--fs-xs);
+    cursor:pointer;display:inline-block}
+  .fdef .editor summary:hover{color:var(--accent)}
+  .fdef .editor[open] summary{margin-bottom:var(--s-2)}
+  .fdef textarea{width:100%;min-height:4rem;resize:vertical}
+  .fdef .row{display:flex;gap:var(--s-3);align-items:center;flex-wrap:wrap;
+    margin-top:var(--s-2)}
+  .fdef .was{color:var(--neutral);font-size:var(--fs-xs);flex:1 1 320px;margin:0}
+  .pill{display:inline-block;font-size:var(--fs-2xs);font-weight:600;
+    border-radius:999px;padding:1px var(--s-2);white-space:nowrap;
+    border:1px solid var(--line-strong);color:var(--muted)}
+  .pill.prompt{border-color:var(--accent);color:var(--accent);
+    background:var(--accent-soft)}
+  .pill.edited{border-color:var(--accent);color:var(--accent)}
   .crit{background:var(--panel);border:1px solid var(--line);
     border-radius:var(--radius-lg);padding:var(--s-4);margin-bottom:var(--s-3);
     box-shadow:var(--shadow-sm)}
@@ -35,17 +78,84 @@
     padding:1px var(--s-2);font-size:var(--fs-2xs);font-weight:600}
 </style>
 
-<div class="lfcol">
-  <h1>What I'm looking for</h1>
+<div class="setcol">
+  <h1>Settings</h1>
   <p class="subtitle">
-    Your standing criteria, written down before you are in the room. Every
-    application is rated against them, and the rating is yours — nothing here
-    calls a model or fills a number for you.
+    The vocabulary the rest of the app runs on: what each field on an
+    application means, and what you are looking for in a job.
   </p>
 
+  <!-- ================================================================== -->
+  <div class="section-band" id="definitions">
+    <h2>Field definitions</h2>
+    <p class="lede">
+      Every field on an application, in one sentence. These are not only
+      documentation: the ones marked <span class="pill prompt">read by the Log</span>
+      are handed verbatim to the model when it reads a dictated note, so
+      sharpening a definition here changes what it writes on the very next
+      one. Editing anything else changes the wording on this page and nothing
+      more, which is why the page says which is which.
+    </p>
+
+    {% for group in definition_groups %}
+    <div class="grp">
+      <h4>{{ group }}</h4>
+      {% for d in definition_rows if d.group == group %}
+      <div class="fdef" id="def-{{ d.field }}">
+        <div class="head">
+          <span class="name">{{ d.label }}</span>
+          <span class="colname">{{ d.field }}</span>
+          <span class="flags">
+            {% if d.in_prompt %}<span class="pill prompt">read by the Log</span>{% endif %}
+            {% if d.edited %}<span class="pill edited">yours</span>{% endif %}
+            <span class="pill">{{ d.writer_label }}</span>
+          </span>
+        </div>
+        <p class="def">{{ d.definition }}</p>
+        <details class="editor">
+          <summary>Edit</summary>
+          <form method="post" action="/ui/settings/definitions/{{ d.field }}">
+            <div class="field">
+              <textarea name="definition" rows="3">{{ d.definition }}</textarea>
+              <p>
+                {% if d.in_prompt %}Handed to the model on the next note you
+                dictate.{% else %}Documentation only — the Log never reads this
+                field.{% endif %}
+                Clearing the box restores the shipped wording.
+              </p>
+            </div>
+            <div class="row">
+              <button type="submit" class="btn">Save</button>
+              {% if d.edited %}
+              <p class="was">Shipped wording: {{ d.default }}</p>
+              {% endif %}
+            </div>
+          </form>
+          {% if d.edited %}
+          <form method="post" action="/ui/settings/definitions/{{ d.field }}/reset"
+                style="margin-top:var(--s-2)">
+            <button type="submit" class="linkbtn">Reset to the shipped wording</button>
+          </form>
+          {% endif %}
+        </details>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- ================================================================== -->
+  <div class="section-band" id="looking-for">
+    <h2>What I&#39;m looking for</h2>
+    <p class="lede">
+      Your standing criteria, written down before you are in the room. Every
+      application is rated against them, and the rating is yours — nothing
+      here calls a model or fills a number for you.
+    </p>
+
   <!-- ------------------------------------------------------------------ -->
-  <div class="lf-sec">
-    <h2>The statement</h2>
+  <div class="set-sec">
+    <h3>The statement</h3>
     <p class="note">
       The part that does not fit an axis: why the list is what it is, what you
       would walk away from, what you are trying to be true of your next job.
@@ -78,8 +188,8 @@
   </div>
 
   <!-- ------------------------------------------------------------------ -->
-  <div class="lf-sec">
-    <h2>The axes</h2>
+  <div class="set-sec">
+    <h3>The axes</h3>
     <p class="note">
       Each application gets a {{ scale_min }}–{{ scale_max }} on every axis, and
       the fit score is the plain average of the ones you have rated. No weights:
@@ -139,8 +249,8 @@
   </div>
 
   <!-- ------------------------------------------------------------------ -->
-  <div class="lf-sec">
-    <h2>How the pipeline scores</h2>
+  <div class="set-sec">
+    <h3>How the pipeline scores</h3>
     <p class="note">
       Fit answers a different question from the forecast. The forecast is
       whether they want you; this is whether you want them. The pair is the
@@ -199,5 +309,6 @@
     </div>
     {% endif %}
   </div>
-</div>
+  </div><!-- /.section-band #looking-for -->
+</div><!-- /.setcol -->
 {% endblock %}
