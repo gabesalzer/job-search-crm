@@ -124,6 +124,10 @@ MODES = {"set", "append"}
 # whole design rests on.
 MAX_CHANGES = 24
 
+# Three at most. A review screen that asks more questions than it proposes
+# changes has stopped being a capture tool and become a form.
+MAX_QUESTIONS = 3
+
 # The value of one field, capped. Generous enough for a paragraph of context
 # and far short of a model that has started transcribing the note back.
 MAX_VALUE_CHARS = 4_000
@@ -149,7 +153,8 @@ def _label(field: str) -> str:
 # --------------------------------------------------------------------------- #
 # The packet: what the model is allowed to know about
 # --------------------------------------------------------------------------- #
-def build_packet(applications: Sequence[Dict[str, Any]], note: str) -> str:
+def build_packet(applications: Sequence[Dict[str, Any]], note: str,
+                 answers: Optional[str] = None) -> str:
     """Fence the open applications and the note into one user turn.
 
     Current values ride along, clipped hard. Without them the model cannot
@@ -186,6 +191,15 @@ def build_packet(applications: Sequence[Dict[str, Any]], note: str) -> str:
     lines.append("<spoken_note>")
     lines.append(_clip(note, MAX_NOTE_CHARS))
     lines.append("</spoken_note>")
+    if (answers or "").strip():
+        # Fenced separately from the note so the original stays verbatim. The
+        # promise the Log makes is that your words are stored as you said them;
+        # appending answers into `text` would quietly break it, and a note you
+        # cannot trust to be what you said is not worth keeping.
+        lines.append("")
+        lines.append("<answers_to_your_questions>")
+        lines.append(_clip(answers, MAX_NOTE_CHARS))
+        lines.append("</answers_to_your_questions>")
     return "\n".join(lines)
 
 
@@ -239,7 +253,9 @@ Answer with a short sentence saying what you heard, then a fenced block:
   {{"application": 3, "field": "next_steps",
     "value": "Send Todd the RevOps deck before Friday",
     "why": "committed to sending the deck"}}
-], "unmatched": ["mentioned a Vercel recruiter — no application on file"]}}
+], "unmatched": ["mentioned a Vercel recruiter — no application on file"],
+ "questions": ["You said you spoke with five people at Apple Cart — who were \
+they? None are on the record."]}}
 ```
 
 Rules:
@@ -262,7 +278,24 @@ person decides in a second rather than re-reading the note.
 moved — a round scheduled, an offer made, a rejection. Enthusiasm is not a \
 stage change.
 - If the note is chatter with nothing to record, emit a block with an empty \
-changes list. That is a correct answer.\
+changes list. That is a correct answer.
+
+Questions
+---------
+``questions`` is for things the note *raised* that you could not resolve, where \
+an answer would change what gets recorded. Ask only about something actually \
+said: a person named who is not on the record, an outcome whose effect on the \
+stage is genuinely ambiguous, two readings of a sentence that lead to different \
+fields.
+
+Never ask about a field merely because it is empty. "What is the pain at \
+Condor?" is not a question raised by the note — it is a request to invent \
+something, and a blank field is a legitimate state in this record. Asking it \
+pressures a guess into a column that everything downstream will then treat as \
+knowledge.
+
+At most three questions, each one sentence, each answerable from memory in a \
+few words. No questions at all is the common and correct case.\
 """
 
 
@@ -373,13 +406,66 @@ def _normalise_field(raw: Any) -> Optional[str]:
     return key if key in WRITABLE else None
 
 
+def coerce_value(field: str, raw: Any, *,
+                 stages: Sequence[str],
+                 categories: Sequence[str],
+                 today: Optional[date] = None) -> Tuple[Optional[str],
+                                                        Optional[str]]:
+    """Validate one field value. Returns (value, reason); reason is None on success.
+
+    Extracted so the parser and the review screen's edit box run the *same*
+    checks. An edited value that skipped validation would be a hole straight
+    through the thing this module exists to be: you could type a stage that
+    does not exist, or clear a field, by hand on the one screen that looks
+    most trustworthy because a person is sitting in front of it.
+
+    The edit path is not more trusted than the model's. It is differently
+    trusted -- a person is unlikely to hallucinate a stage, and quite likely to
+    make a typo.
+    """
+    value = raw.strip() if isinstance(raw, str) else ""
+    if not value:
+        return None, ("An empty value was proposed for {} — clearing a field "
+                      "is a hand edit, so it was dropped.".format(_label(field)))
+    if len(value) > MAX_VALUE_CHARS:
+        return None, ("The proposed {} ran to {} characters and was "
+                      "dropped.".format(_label(field), len(value)))
+
+    if field == "stage":
+        match = {str(s).lower(): str(s) for s in stages}.get(value.lower())
+        if not match:
+            return None, "{!r} isn't a stage, so that change was dropped.".format(value)
+        return match, None
+
+    if field == "lost_category":
+        match = {str(c).lower(): str(c) for c in categories}.get(value.lower())
+        if not match:
+            return None, ("{!r} isn't a closed-lost category, so that change "
+                          "was dropped.".format(value))
+        return match, None
+
+    if field in DATE_FIELDS:
+        iso = parse_date(value)
+        if iso is None:
+            return None, ("{!r} isn't a date I could read, so {} was left "
+                          "alone. Dates have to be exact — say the "
+                          "day.".format(value, _label(field)))
+        objection = _date_is_sane(iso, today)
+        if objection:
+            return None, objection
+        return iso, None
+
+    return value, None
+
+
 def parse(raw: Optional[str], *,
           applications: Sequence[Dict[str, Any]],
           stages: Sequence[str],
           categories: Sequence[str],
           today: Optional[date] = None) -> Tuple[List[Dict[str, Any]],
-                                                 List[str], List[str]]:
-    """Validate a raw changes block into (changes, unmatched, rejected).
+                                                 List[str], List[str],
+                                                 List[str]]:
+    """Validate a raw block into (changes, unmatched, questions, rejected).
 
     ``changes`` are proposals that survived every check, each carrying the
     current value alongside the proposed one so the review screen can render
@@ -388,6 +474,12 @@ def parse(raw: Optional[str], *,
     ``unmatched`` is the model's own list of things it could not attach to a
     record -- passed through, because "you mentioned a company with no
     application on file" is the single most useful thing this feature says.
+
+    ``questions`` are things the note raised that the model could not resolve
+    and that an answer would change. Capped, and the prompt is explicit that a
+    question must arise from something actually said -- a question about a
+    merely-empty field is a request to invent a value, which is the one thing
+    this record is built not to do.
 
     ``rejected`` is what *this module* threw out, with a reason. Nothing is
     ever dropped silently: a proposal that vanished without explanation is
@@ -399,24 +491,30 @@ def parse(raw: Optional[str], *,
     """
     changes: List[Dict[str, Any]] = []
     unmatched: List[str] = []
+    questions: List[str] = []
     rejected: List[str] = []
     if not raw:
-        return changes, unmatched, ["The reply contained no changes block, so "
-                                    "nothing was proposed."]
+        return changes, unmatched, questions, [
+            "The reply contained no changes block, so nothing was proposed."]
 
     try:
         payload = json.loads(raw)
     except (ValueError, TypeError):
-        return changes, unmatched, ["The proposed changes weren't valid JSON, "
-                                    "so nothing was proposed."]
+        return changes, unmatched, questions, [
+            "The proposed changes weren't valid JSON, so nothing was proposed."]
     if not isinstance(payload, dict):
-        return changes, unmatched, ["The proposed changes weren't an object, "
-                                    "so nothing was proposed."]
+        return changes, unmatched, questions, [
+            "The proposed changes weren't an object, so nothing was proposed."]
 
     for item in payload.get("unmatched") or []:
         text = str(item).strip()
         if text:
             unmatched.append(text)
+
+    for item in (payload.get("questions") or [])[:MAX_QUESTIONS]:
+        text = str(item).strip()
+        if text:
+            questions.append(text)
 
     by_id = {}
     for app in applications:
@@ -425,19 +523,17 @@ def parse(raw: Optional[str], *,
         except (TypeError, ValueError):
             continue
 
-    stage_lookup = {str(s).lower(): str(s) for s in stages}
-    category_lookup = {str(c).lower(): str(c) for c in categories}
-
     raw_changes = payload.get("changes")
     if not isinstance(raw_changes, list):
-        return changes, unmatched, ["The changes list was missing or wasn't a "
-                                    "list, so nothing was proposed."]
+        return changes, unmatched, questions, [
+            "The changes list was missing or wasn't a list, so nothing was "
+            "proposed."]
     if len(raw_changes) > MAX_CHANGES:
         rejected.append(
             "The note proposed {} changes, more than the {} a single update is "
             "allowed to make. None were applied — try dictating it in "
             "parts.".format(len(raw_changes), MAX_CHANGES))
-        return changes, unmatched, rejected
+        return changes, unmatched, questions, rejected
 
     seen = set()
     for entry in raw_changes:
@@ -464,49 +560,11 @@ def parse(raw: Optional[str], *,
                 "dropped.".format(entry.get("field")))
             continue
 
-        value = entry.get("value")
-        value = value.strip() if isinstance(value, str) else ""
-        if not value:
-            rejected.append(
-                "An empty value was proposed for {} on {} — clearing a field "
-                "is a hand edit, so it was dropped.".format(
-                    _label(field), app.get("company") or app_id))
+        value, reason = coerce_value(field, entry.get("value"), stages=stages,
+                                     categories=categories, today=today)
+        if reason:
+            rejected.append(reason)
             continue
-        if len(value) > MAX_VALUE_CHARS:
-            rejected.append(
-                "The proposed {} on {} ran to {} characters and was "
-                "dropped.".format(_label(field), app.get("company") or app_id,
-                                  len(value)))
-            continue
-
-        if field == "stage":
-            match = stage_lookup.get(value.lower())
-            if not match:
-                rejected.append(
-                    "{!r} isn't a stage, so that change was dropped.".format(value))
-                continue
-            value = match
-        elif field == "lost_category":
-            match = category_lookup.get(value.lower())
-            if not match:
-                rejected.append(
-                    "{!r} isn't a closed-lost category, so that change was "
-                    "dropped.".format(value))
-                continue
-            value = match
-        elif field in DATE_FIELDS:
-            iso = parse_date(value)
-            if iso is None:
-                rejected.append(
-                    "{!r} isn't a date I could read, so {} was left alone. "
-                    "Dates have to be exact — say the day.".format(
-                        value, _label(field)))
-                continue
-            objection = _date_is_sane(iso, today)
-            if objection:
-                rejected.append(objection)
-                continue
-            value = iso
 
         mode = str(entry.get("mode") or "").strip().lower()
         if mode not in MODES:
@@ -548,7 +606,7 @@ def parse(raw: Optional[str], *,
             "key": "{}:{}".format(app_id, field),
         })
 
-    return changes, unmatched, rejected
+    return changes, unmatched, questions, rejected
 
 
 def merged_value(current: Optional[str], value: str, mode: str) -> str:

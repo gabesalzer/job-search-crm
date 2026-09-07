@@ -1089,6 +1089,12 @@ class LogEntry(Base):
     rejected = Column(Text)      # what the parser threw out, and why
     unmatched = Column(Text)     # what the model could not place
     prose = Column(Text)         # the sentence the model wrote above its block
+    questions = Column(Text)     # what it asked, as JSON
+    # Your replies to those questions, kept in their own column rather than
+    # appended to `text`. The Log's promise is that what you said is stored as
+    # you said it; folding answers into the note would break that, and a
+    # transcript you cannot trust to be verbatim is not worth keeping.
+    answers = Column(Text)
     model = Column(String(64))
     usage = Column(Text)
     created_at = Column(DateTime, default=_utcnow, index=True)

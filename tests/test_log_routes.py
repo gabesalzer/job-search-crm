@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover
     print("SKIP  fastapi is not installed; route tests cannot run here.")
     raise SystemExit(0)
 
-from app import models  # noqa: E402
+from app import logspec, models  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import ui as ui_module  # noqa: E402
@@ -241,6 +241,124 @@ check("...and the newest entry is first", notes.startswith("Second entry."))
 
 
 # --------------------------------------------------------------------------- #
+# Correcting a proposal before approving it
+# --------------------------------------------------------------------------- #
+say([{"application": CONDOR, "field": "risks",
+      "value": "Perception of my technical aptitude",
+      "why": "named it as the biggest risk"}])
+entry = submit("Biggest risk at Condor is how they read my technical aptitude.")
+key = proposal(entry)[0]["key"]
+
+page = client.get("/log?entry_id={}".format(entry))
+check("the proposed value is editable rather than fixed",
+      'name="value_{}"'.format(key) in page.text)
+
+client.post("/ui/log/{}/apply".format(entry),
+            data={"approve": key, "value_" + key: "Perception of my AI aptitude"},
+            follow_redirects=False)
+check("the corrected value is what gets written",
+      _field(CONDOR, "risks") == "Perception of my AI aptitude")
+
+with SessionLocal() as db:
+    rec = json.loads(db.get(models.LogEntry, entry).applied)[0]
+check("the entry records that you rewrote it", rec["edited"] is True)
+check("...and keeps what was proposed, so the gap is measurable",
+      rec["proposed_value"] == "Perception of my technical aptitude")
+
+# An untouched box is not an edit — otherwise every applied change would look
+# corrected and the measurement would be worthless.
+say([{"application": SIERRA, "field": "pain",
+      "value": "Nobody owns forecasting", "why": "said so"}])
+entry = submit("Sierra has nobody owning forecasting.")
+key = proposal(entry)[0]["key"]
+client.post("/ui/log/{}/apply".format(entry),
+            data={"approve": key, "value_" + key: "Nobody owns forecasting"},
+            follow_redirects=False)
+with SessionLocal() as db:
+    rec = json.loads(db.get(models.LogEntry, entry).applied)[0]
+check("submitting the box unchanged is not counted as an edit",
+      rec["edited"] is False and "proposed_value" not in rec)
+
+# The edit box is the screen a person trusts most, which is exactly why it
+# must not be the one place an invalid value gets through.
+# Takehome rather than Discovery: Condor is already at Discovery by this point
+# in the file, and a proposal that restates the current value is correctly
+# refused before it ever reaches the edit box.
+say([{"application": CONDOR, "field": "stage", "value": "Takehome",
+      "why": "moved on"}])
+entry = submit("Condor moved me forward.")
+key = proposal(entry)[0]["key"]
+before = _stage(CONDOR)
+client.post("/ui/log/{}/apply".format(entry),
+            data={"approve": key, "value_" + key: "Panel Round"},
+            follow_redirects=False)
+check("an edited stage that isn't a real stage is refused, not written",
+      _stage(CONDOR) == before)
+with SessionLocal() as db:
+    row = db.get(models.LogEntry, entry)
+check("...and the refusal is reported rather than silent",
+      "Panel Round" in (row.rejected or ""))
+
+say([{"application": SIERRA, "field": "process", "value": "Panel then CEO",
+      "why": "described it"}])
+entry = submit("Sierra runs a panel then a final with the CEO.")
+key = proposal(entry)[0]["key"]
+client.post("/ui/log/{}/apply".format(entry),
+            data={"approve": key, "value_" + key: "   "},
+            follow_redirects=False)
+check("clearing a field via the edit box is refused too",
+      _field(SIERRA, "process") is None)
+
+
+# --------------------------------------------------------------------------- #
+# Questions it raised, and answering them
+# --------------------------------------------------------------------------- #
+_reply["text"] = ("Heard a risk.\n```changes\n" + json.dumps({
+    "changes": [],
+    "questions": ["You said you spoke with five people — who were they?",
+                  "Should that move the stage, or just go in the notes?"],
+}) + "\n```")
+entry = submit("Spoke with five people at Condor. It went okay, not great.")
+with SessionLocal() as db:
+    row = db.get(models.LogEntry, entry)
+check("questions are stored", len(json.loads(row.questions or "[]")) == 2)
+page = client.get("/log?entry_id={}".format(entry))
+check("...and shown on the review screen", "who were they" in page.text)
+check("...with the note that they come from what you said, not empty fields",
+      "not by empty fields" in page.text)
+
+say([{"application": CONDOR, "field": "notes",
+      "value": "Spoke with five people; went okay, not great.",
+      "why": "your answer said notes, not a stage move"}])
+client.post("/ui/log/{}/answer".format(entry),
+            data={"answer_0": "Todd, and four others I did not catch",
+                  "answer_1": "Just the notes"}, follow_redirects=False)
+with SessionLocal() as db:
+    row = db.get(models.LogEntry, entry)
+check("answering re-reads the note", len(json.loads(row.proposal or "[]")) == 1)
+check("your answers are stored", "Just the notes" in (row.answers or ""))
+check("...beside the note, which stays exactly what you said",
+      "five people at Condor" in row.text and "Just the notes" not in row.text)
+check("the answers reach the model", "Just the notes"
+      in str(_reply.get("last_packet", "")))
+check("...fenced separately from the note",
+      "<answers_to_your_questions>" in str(_reply.get("last_packet", "")))
+
+say([{"application": CONDOR, "field": "notes", "value": "x"}])
+before_answers = None
+with SessionLocal() as db:
+    before_answers = db.get(models.LogEntry, entry).answers
+client.post("/ui/log/{}/answer".format(entry), data={}, follow_redirects=False)
+with SessionLocal() as db:
+    check("answering nothing changes nothing",
+          db.get(models.LogEntry, entry).answers == before_answers)
+
+check("the prompt forbids asking about merely-empty fields",
+      "not a question raised by the note" in logspec.system_prompt(
+          stages=["Discovery"], categories=["Other"]))
+
+
+# --------------------------------------------------------------------------- #
 # What a note may not do, tested against the real routes
 # --------------------------------------------------------------------------- #
 say([{"application": CONDOR, "field": "champion", "value": "true"}])
@@ -391,6 +509,10 @@ with SessionLocal() as db:
 # --------------------------------------------------------------------------- #
 # The API door: same three steps, no exception to the review gate
 # --------------------------------------------------------------------------- #
+# Captured rather than assumed to be None: earlier blocks in this file write
+# to `risks`, and a hardcoded expectation here is a test that gets deleted for
+# flakiness rather than fixed.
+risks_before = _field(CONDOR, "risks")
 say([{"application": CONDOR, "field": "risks",
       "value": "Comp band is light against my number", "why": "said comp came up"}])
 resp = client.post("/api/log", json={"text": "Comp came up on Condor and it's light."})
@@ -401,7 +523,8 @@ check("the API leaves it pending — automation gets no exception to the gate",
       body["status"] == "pending")
 check("the API hands back somewhere for a person to go",
       body["review_url"].endswith(str(body["id"])))
-check("the API wrote nothing to the record", _field(CONDOR, "risks") is None)
+check("the API wrote nothing to the record",
+      _field(CONDOR, "risks") == risks_before)
 
 pending = client.get("/api/log/pending").json()
 check("a note posted by API shows up as pending",

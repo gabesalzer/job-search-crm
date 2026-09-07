@@ -377,7 +377,11 @@ LOG_ENTRY = SimpleNamespace(
 LOG_BASE = {
     "active": "log", "entry": None, "changes": [], "unmatched": [],
     "rejected": [], "recent": [], "pending": [], "unread": [], "failed": False,
-    "enabled": True, "error": "", "applied": "",
+    "questions": [], "enabled": True, "error": "", "applied": "",
+    "stages": ["Staging", "Qualification", "Discovery", "Closed Lost"],
+    "lost_categories": ["Compensation gap", "Other"],
+    "date_fields": ["expected_close_date"],
+    "picklist_fields": ["stage", "lost_category"],
 }
 
 cases = [
@@ -1054,6 +1058,32 @@ cases = [
         "unmatched": ["mentioned a Vercel recruiter — no application on file"],
         "rejected": ["'champion' isn't a field a note can change, so it was "
                      "dropped."],
+    }),
+    # Questions raised by the note, alongside proposals. Both halves render.
+    ("log.html (with questions)", {
+        **LOG_BASE,
+        "entry": LOG_ENTRY,
+        "questions": [
+            "You said you spoke with five people at Apple Cart — who were they?",
+            "The Linear conversation went okay, not great — should that move "
+            "the stage, or just go in the notes?",
+        ],
+        "changes": [
+            {"key": "3:risks", "application_id": 3, "company": "Apple Cart",
+             "title": "GTM Systems Lead", "field": "risks", "label": "risks",
+             "mode": "set", "current": "",
+             "value": "Perception of my technical aptitude",
+             "why": "named it as the biggest risk"},
+            {"key": "3:stage", "application_id": 3, "company": "Apple Cart",
+             "title": "GTM Systems Lead", "field": "stage", "label": "stage",
+             "mode": "set", "current": "Qualification", "value": "Discovery",
+             "why": "went on site"},
+            {"key": "3:expected_close_date", "application_id": 3,
+             "company": "Apple Cart", "title": "GTM Systems Lead",
+             "field": "expected_close_date", "label": "expected close date",
+             "mode": "set", "current": "", "value": "2026-10-15",
+             "why": "said they would decide mid-October"},
+        ],
     }),
     # Nothing proposed and nothing to review: the empty page you land on.
     ("log.html (nothing logged yet)", LOG_BASE),

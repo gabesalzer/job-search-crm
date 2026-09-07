@@ -2831,6 +2831,7 @@ def _read_into(db: Session, entry: models.LogEntry) -> models.LogEntry:
     entry.prose = None
     entry.proposal = None
     entry.unmatched = None
+    entry.questions = None
     entry.rejected = None
     entry.model = None
     entry.usage = None
@@ -2863,7 +2864,8 @@ def _read_into(db: Session, entry: models.LogEntry) -> models.LogEntry:
                                   categories=LOST_CATEGORY_VALUES,
                                   today=today.isoformat(),
                                   definitions=_definition_overrides(db)),
-            logspec.build_messages(logspec.build_packet(apps, entry.text)),
+            logspec.build_messages(
+                logspec.build_packet(apps, entry.text, entry.answers)),
             max_tokens=logspec.MAX_TOKENS,
             timeout=90,
             usage_out=usage,
@@ -2874,13 +2876,14 @@ def _read_into(db: Session, entry: models.LogEntry) -> models.LogEntry:
         return failed("Reading the note failed unexpectedly: {}".format(exc))
 
     prose, block = logspec.extract_block(text)
-    changes, unmatched, rejected = logspec.parse(
+    changes, unmatched, questions, rejected = logspec.parse(
         block, applications=apps, stages=STAGE_ORDER_VALUES,
         categories=LOST_CATEGORY_VALUES, today=today)
 
     entry.prose = prose or None
     entry.proposal = json.dumps(changes)
     entry.unmatched = json.dumps(unmatched) if unmatched else None
+    entry.questions = json.dumps(questions) if questions else None
     entry.rejected = json.dumps(rejected) if rejected else None
     entry.model = model_used
     entry.usage = json.dumps(usage) if usage else None
@@ -2909,8 +2912,8 @@ def _propose_from_note(db: Session, note: str, *, origin: str
     return _read_into(db, entry)
 
 
-def _apply_changes(db: Session, entry: models.LogEntry,
-                   approved_keys: set) -> List[dict]:
+def _apply_changes(db: Session, entry: models.LogEntry, approved_keys: set,
+                   edits: Optional[dict] = None) -> List[dict]:
     """Write the approved changes. The only function in this feature that writes.
 
     Kept to one function on purpose. It is the seam that makes this portable:
@@ -2924,7 +2927,10 @@ def _apply_changes(db: Session, entry: models.LogEntry,
     drop whatever you typed in between.
     """
     proposed = json.loads(entry.proposal or "[]")
+    edits = edits or {}
+    today = datetime.now(timezone.utc).date()
     written = []
+    refused = []
     for change in proposed:
         if change["key"] not in approved_keys:
             continue
@@ -2932,7 +2938,23 @@ def _apply_changes(db: Session, entry: models.LogEntry,
         if app_obj is None:
             continue          # deleted between proposing and approving
 
-        field, value, mode = change["field"], change["value"], change["mode"]
+        field, mode = change["field"], change["mode"]
+        value = change["value"]
+
+        # A value you corrected goes through exactly the checks the model's had
+        # to pass. The edit box is the screen a person trusts most, which is
+        # precisely why it must not be the one place a bad value gets in.
+        edited = False
+        raw_edit = edits.get(change["key"])
+        if raw_edit is not None and str(raw_edit).strip() != str(value).strip():
+            coerced, reason = logspec.coerce_value(
+                field, raw_edit, stages=STAGE_ORDER_VALUES,
+                categories=LOST_CATEGORY_VALUES, today=today)
+            if reason:
+                refused.append("{}: {}".format(
+                    change.get("company") or change["application_id"], reason))
+                continue
+            value, edited = coerced, True
         if field == "stage":
             # Assigning stage fires the StageHistory listener, so a stage moved
             # by voice lands in the funnel history identically to one dragged
@@ -2952,11 +2974,25 @@ def _apply_changes(db: Session, entry: models.LogEntry,
         # A voice update is activity. Without this a dictated note leaves the
         # card looking untouched for as long as the board's age counter says.
         app_obj.last_activity_date = datetime.now(timezone.utc)
-        written.append(change)
+        # Record what was actually written *and* whether you rewrote it.
+        # Accepted-verbatim, edited-then-accepted and rejected are three
+        # different verdicts on the model, and collapsing them into a binary
+        # throws away the most useful half of the signal -- a proposal you
+        # keep having to correct is a different problem from one you keep
+        # throwing away, and they have different fixes.
+        record = dict(change)
+        record["value"] = value
+        record["edited"] = edited
+        if edited:
+            record["proposed_value"] = change["value"]
+        written.append(record)
 
     entry.applied = json.dumps(written)
     entry.status = "applied" if written else "discarded"
     entry.resolved_at = datetime.now(timezone.utc)
+    if refused:
+        entry.rejected = json.dumps(
+            json.loads(entry.rejected or "[]") + refused)
     db.commit()
     return written
 
@@ -2989,6 +3025,7 @@ def _log_context(db: Session, entry: Optional[models.LogEntry] = None,
         "entry": entry,
         "changes": json.loads(entry.proposal or "[]") if entry else [],
         "unmatched": json.loads(entry.unmatched or "[]") if entry else [],
+        "questions": json.loads(entry.questions or "[]") if entry else [],
         "rejected": json.loads(entry.rejected or "[]") if entry else [],
         "recent": recent,
         # Anything queued by the API and not yet reviewed. Surfaced at the top
@@ -3000,6 +3037,10 @@ def _log_context(db: Session, entry: Optional[models.LogEntry] = None,
         "unread": [u for u in unread if entry is None or u.id != entry.id],
         "failed": bool(entry) and entry.status == STATUS_FAILED,
         "enabled": llm.enabled(),
+        "stages": STAGE_ORDER_VALUES,
+        "lost_categories": LOST_CATEGORY_VALUES,
+        "date_fields": logspec.DATE_FIELDS,
+        "picklist_fields": logspec.PICKLIST_FIELDS,
         "error": error,
         "applied": applied,
     }
@@ -3036,7 +3077,12 @@ async def log_apply(entry_id: int, request: Request,
     entry = _get_or_404(db, models.LogEntry, entry_id)
     form = await request.form()
     approved = {v for k, v in form.multi_items() if k == "approve"}
-    written = _apply_changes(db, entry, approved)
+    # `value_<key>` carries whatever is in the box, edited or not. Comparing
+    # against the proposal is what decides whether it counts as an edit, so an
+    # untouched box costs nothing.
+    edits = {k[len("value_"):]: v for k, v in form.multi_items()
+             if k.startswith("value_")}
+    written = _apply_changes(db, entry, approved, edits)
     return RedirectResponse(
         url="/log?applied={}".format(quote(logspec.summarise(written))),
         status_code=303)
@@ -3065,6 +3111,36 @@ def log_retry(entry_id: int, db: Session = Depends(get_db)):
     once — and so the double-entry check the history exists for keeps working.
     """
     entry = _get_or_404(db, models.LogEntry, entry_id)
+    _read_into(db, entry)
+    return RedirectResponse(
+        url="/log?entry_id={}".format(entry.id), status_code=303)
+
+
+@router.post("/ui/log/{entry_id}/answer")
+async def log_answer(entry_id: int, request: Request,
+                     db: Session = Depends(get_db)):
+    """Answer the questions it asked, then read the note again with them.
+
+    The answers are stored beside the note rather than appended to it, so what
+    you said stays verbatim, and the re-read sees both. This is the only action
+    a question offers: there is no "create the person it asked about" button,
+    because the Log's write surface is deliberately existing applications only
+    and a question is not a reason to widen it.
+    """
+    entry = _get_or_404(db, models.LogEntry, entry_id)
+    form = await request.form()
+    asked = json.loads(entry.questions or "[]")
+    pairs = []
+    for i, question in enumerate(asked):
+        reply = (form.get("answer_{}".format(i)) or "").strip()
+        if reply:
+            pairs.append("Q: {}\nA: {}".format(question, reply))
+    if not pairs:
+        return RedirectResponse(
+            url="/log?entry_id={}".format(entry.id), status_code=303)
+    entry.answers = "\n\n".join(
+        ([entry.answers] if entry.answers else []) + pairs)
+    db.commit()
     _read_into(db, entry)
     return RedirectResponse(
         url="/log?entry_id={}".format(entry.id), status_code=303)

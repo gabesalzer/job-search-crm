@@ -106,12 +106,12 @@ check("a fenced block is extracted", block == '{"changes": []}')
 check("the block is stripped out of the prose",
       "```" not in prose and "Heard a stage move." in prose)
 
-changes, unmatched, rejected = logspec.parse(
+changes, unmatched, questions, rejected = logspec.parse(
     None, applications=APPS, stages=STAGES, categories=CATEGORIES)
 check("no block at all proposes nothing", changes == [])
 check("...and says so rather than failing silently", len(rejected) == 1)
 
-changes, _, rejected = logspec.parse(
+changes, _, _, rejected = logspec.parse(
     "not json at all", applications=APPS, stages=STAGES, categories=CATEGORIES)
 check("malformed JSON proposes nothing", changes == [])
 check("...and is reported", "valid JSON" in rejected[0])
@@ -120,7 +120,7 @@ check("...and is reported", "valid JSON" in rejected[0])
 # --------------------------------------------------------------------------- #
 # The happy path
 # --------------------------------------------------------------------------- #
-changes, unmatched, rejected = parse({
+changes, unmatched, questions, rejected = parse({
     "changes": [
         {"application": 3, "field": "stage", "value": "Discovery",
          "why": "panel being scheduled"},
@@ -148,18 +148,18 @@ check("the company name rides along for the review screen",
 # --------------------------------------------------------------------------- #
 # Entity resolution: an id that is not in the record
 # --------------------------------------------------------------------------- #
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 99, "field": "notes", "value": "Something."},
 ]})
 check("a change to an unknown application is dropped", changes == [])
 check("...and names the id it could not find", "99" in rejected[0])
 
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"field": "notes", "value": "Something."},
 ]})
 check("a change with no application id is dropped", changes == [])
 
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": "Condor", "field": "notes", "value": "Something."},
 ]})
 check("a change naming a company instead of an id is dropped", changes == [])
@@ -168,19 +168,19 @@ check("a change naming a company instead of an id is dropped", changes == [])
 # --------------------------------------------------------------------------- #
 # The field allow-list
 # --------------------------------------------------------------------------- #
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "champion", "value": "true"},
 ]})
 check("a note cannot set champion however it is phrased", changes == [])
 check("...and is told which field it tried", "champion" in rejected[0])
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "next steps", "value": "Call Todd"},
 ]})
 check("a field named with a space still resolves",
       len(changes) == 1 and changes[0]["field"] == "next_steps")
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "notes about pain", "value": "x"},
 ]})
 check("field matching is exact, not fuzzy", changes == [])
@@ -189,24 +189,24 @@ check("field matching is exact, not fuzzy", changes == [])
 # --------------------------------------------------------------------------- #
 # Picklists are validated against the real vocabulary
 # --------------------------------------------------------------------------- #
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "stage", "value": "Panel"},
 ]})
 check("an invented stage is dropped", changes == [])
 check("...and is quoted back", "Panel" in rejected[0])
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "stage", "value": "discovery"},
 ]})
 check("a stage matches case-insensitively and is normalised",
       len(changes) == 1 and changes[0]["value"] == "Discovery")
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "lost_category", "value": "Nonsense"},
 ]})
 check("an invented lost category is dropped", changes == [])
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "stage", "value": "Discovery",
      "mode": "append"},
 ]})
@@ -218,7 +218,7 @@ check("appending to a picklist is silently corrected to replacing",
 # Blank is not zero: a note may never clear a field
 # --------------------------------------------------------------------------- #
 for empty in ("", "   ", None, 0):
-    changes, _, rejected = parse({"changes": [
+    changes, _, _, rejected = parse({"changes": [
         {"application": 3, "field": "next_steps", "value": empty},
     ]})
     check("an empty value ({!r}) never clears a field".format(empty),
@@ -230,7 +230,7 @@ check("...and the rejection says clearing is a hand edit",
 # --------------------------------------------------------------------------- #
 # Restating what a field already says is not a change
 # --------------------------------------------------------------------------- #
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "next_steps", "value": "Wait for Todd"},
 ]})
 check("a value identical to the current one is not proposed", changes == [])
@@ -240,29 +240,29 @@ check("...and says so rather than vanishing", "already says" in rejected[0])
 # --------------------------------------------------------------------------- #
 # Caps
 # --------------------------------------------------------------------------- #
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "notes", "value": "x" * 5000},
 ]})
 check("an absurdly long value is dropped", changes == [])
 
 many = [{"application": 3, "field": "notes", "value": "n{}".format(i)}
         for i in range(logspec.MAX_CHANGES + 1)]
-changes, _, rejected = parse({"changes": many})
+changes, _, _, rejected = parse({"changes": many})
 check("a note proposing more changes than the cap applies none",
       changes == [])
 check("...and suggests dictating it in parts", "in parts" in rejected[0])
 
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "notes", "value": "first"},
     {"application": 3, "field": "notes", "value": "second"},
 ]})
 check("the same field proposed twice keeps only the first",
       len(changes) == 1 and changes[0]["value"] == "first")
 
-changes, _, rejected = parse({"changes": "not a list"})
+changes, _, _, rejected = parse({"changes": "not a list"})
 check("a changes value that is not a list proposes nothing", changes == [])
 
-changes, _, _ = parse({"changes": [None, {"application": 3, "field": "notes",
+changes, _, _, _ = parse({"changes": [None, {"application": 3, "field": "notes",
                                           "value": "ok"}]})
 check("a junk entry is dropped without losing the good one alongside it",
       len(changes) == 1)
@@ -279,7 +279,7 @@ for bad in ("10/31/26", "31 October 2026", "October 31, 2026", "2026-10",
     check("{!r} is refused rather than guessed at".format(bad),
           logspec.parse_date(bad) is None)
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "expected_close_date", "value": "2026-10-31",
      "why": "said they would decide by the end of October"},
 ]})
@@ -287,40 +287,40 @@ check("a good close date survives",
       len(changes) == 1 and changes[0]["value"] == "2026-10-31")
 check("...as a set, never an append", changes[0]["mode"] == "set")
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "expected_close_date", "value": "2026-10-31",
      "mode": "append"},
 ]})
 check("appending to a date is corrected to replacing",
       len(changes) == 1 and changes[0]["mode"] == "set")
 
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "expected_close_date", "value": "soon"},
 ]})
 check("a vague date is dropped", changes == [])
 check("...and says a day is needed", "say the day" in rejected[0])
 
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "expected_close_date", "value": "2028-01-01"},
 ]})
 check("a date more than a year out is dropped as a likely misread year",
       changes == [])
 check("...and says so", "misread year" in rejected[0])
 
-changes, _, rejected = parse({"changes": [
+changes, _, _, rejected = parse({"changes": [
     {"application": 3, "field": "expected_close_date", "value": "2026-01-01"},
 ]})
 check("a date well in the past is dropped", changes == [])
 check("...and says an expected close is about what is ahead",
       "still ahead" in rejected[0])
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "expected_close_date", "value": "2026-09-01"},
 ]})
 check("a date a few days past is allowed — a slipped date is real news",
       len(changes) == 1)
 
-changes, _, _ = logspec.parse(
+changes, _, _, _ = logspec.parse(
     json.dumps({"changes": [{"application": 3,
                              "field": "expected_close_date",
                              "value": "2031-01-01"}]}),
@@ -328,10 +328,69 @@ changes, _, _ = logspec.parse(
 check("with no today to measure against, only the format is enforced",
       len(changes) == 1)
 
-changes, _, _ = parse({"changes": [
+changes, _, _, _ = parse({"changes": [
     {"application": 3, "field": "expected close date", "value": "2026-10-31"},
 ]})
 check("the date field resolves when named with spaces", len(changes) == 1)
+
+
+# --------------------------------------------------------------------------- #
+# coerce_value: one validator, used by the parser and by the edit box
+# --------------------------------------------------------------------------- #
+def coerce(field, raw):
+    return logspec.coerce_value(field, raw, stages=STAGES,
+                                categories=CATEGORIES, today=TODAY)
+
+
+check("a good text value passes", coerce("notes", "Something")[0] == "Something")
+check("...trimmed", coerce("notes", "  Something  ")[0] == "Something")
+for empty in ("", "   ", None, 7):
+    value, reason = coerce("notes", empty)
+    check("{!r} is refused as a value".format(empty),
+          value is None and reason is not None)
+check("clearing is named as a hand edit", "hand edit" in coerce("notes", "")[1])
+check("a stage is normalised", coerce("stage", "discovery")[0] == "Discovery")
+check("an invented stage is refused", coerce("stage", "Panel")[0] is None)
+check("a category is validated",
+      coerce("lost_category", "Nonsense")[0] is None)
+check("a date is normalised",
+      coerce("expected_close_date", "2026-10-31")[0] == "2026-10-31")
+check("a loose date is refused",
+      coerce("expected_close_date", "10/31/26")[0] is None)
+check("an over-long value is refused",
+      coerce("notes", "x" * 5000)[0] is None)
+# This is the load-bearing one: the edit box on the review screen calls this,
+# so anything it lets through is written to the record by a person who trusts
+# the screen in front of them.
+check("the parser and the edit box share this function",
+      "coerce_value" in open(
+          pathlib.Path(__file__).resolve().parents[1]
+          / "app" / "routers" / "ui.py").read())
+
+
+# --------------------------------------------------------------------------- #
+# Questions
+# --------------------------------------------------------------------------- #
+_, _, questions, _ = parse({"changes": [],
+                            "questions": ["Who were the five people?"]})
+check("a question survives", questions == ["Who were the five people?"])
+
+_, _, questions, _ = parse({"changes": [],
+                            "questions": ["a", "b", "c", "d", "e"]})
+check("questions are capped", len(questions) == logspec.MAX_QUESTIONS)
+
+_, _, questions, _ = parse({"changes": [], "questions": ["", "   ", "real"]})
+check("blank questions are dropped", questions == ["real"])
+
+_, _, questions, _ = parse({"changes": []})
+check("no questions is the normal case", questions == [])
+
+check("the prompt caps them in words too, not just in code",
+      "At most three questions" in prompt)
+check("the prompt forbids asking about a merely-empty field",
+      "not a question raised by the note" in prompt)
+check("...and says why, in terms of the record's own rule",
+      "blank field is a legitimate state" in prompt)
 
 
 # --------------------------------------------------------------------------- #
@@ -347,6 +406,14 @@ check("the packet carries current values so a restatement is visible",
 check("the packet carries people, since notes name humans",
       "Todd Grant" in packet)
 check("the note itself is in the packet", "Talked to Todd today." in packet)
+answered = logspec.build_packet(APPS, "Talked to Todd today.",
+                                "Q: Who?\nA: Todd Grant")
+check("answers ride in the packet when there are any",
+      "Todd Grant" in answered)
+check("...fenced separately, so the note stays verbatim",
+      "<answers_to_your_questions>" in answered)
+check("no answers means no empty fence",
+      "<answers_to_your_questions>" not in packet)
 dated = logspec.build_packet(
     [{**APPS[0], "expected_close_date": "2026-10-31"}], "note")
 check("the packet carries the current expected close date, so the model can "

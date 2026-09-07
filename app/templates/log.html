@@ -40,6 +40,21 @@
   .chg .was{color:var(--neutral);text-decoration:line-through;
     text-decoration-color:var(--line-strong)}
   .chg .now{border-left-color:var(--accent)}
+  /* The editable control keeps the accent rule so a corrected value still
+     reads as "this is what will be written", not as a form field adrift. */
+  .chg .now.edit{width:100%;border:1px solid var(--line);border-left:2px solid
+    var(--accent);border-radius:var(--radius-sm);padding:var(--s-2) var(--s-3);
+    background:#fff}
+  .chg .now.edit:focus{border-color:var(--accent);box-shadow:var(--ring);
+    outline:none}
+  .chg .hint{color:var(--neutral);font-size:var(--fs-2xs);margin:2px 0 0}
+  .qs{background:var(--accent-soft);border:1px solid var(--accent);
+    border-radius:var(--radius-lg);padding:var(--s-4);margin-bottom:var(--s-4)}
+  .qs h3{font-size:var(--fs-sm);font-weight:640;margin:0 0 var(--s-1)}
+  .qs .note{margin-bottom:var(--s-3)}
+  .qs .q{margin-bottom:var(--s-3)}
+  .qs .q label{display:block;font-size:var(--fs-sm);margin-bottom:var(--s-1)}
+  .qs input{width:100%}
   .chg .empty{font-style:italic;color:var(--neutral);text-decoration:none}
   .chg .why{color:var(--muted);font-size:var(--fs-xs);margin:0}
   .actions{display:flex;gap:var(--s-3);align-items:center;flex-wrap:wrap;
@@ -155,7 +170,33 @@
     </div>
     {% endif %}
 
+    {% if questions %}
+    <div class="qs">
+      <h3>It has {{ questions|length }} question{{ '' if questions|length == 1 else 's' }}</h3>
+      <p class="note" style="color:var(--muted);font-size:var(--fs-xs)">
+        Raised by what you said, not by empty fields. Answer what you know and
+        it will read the note again with your answers; skip them and nothing
+        is lost — the proposals below stand either way.
+      </p>
+      <form method="post" action="/ui/log/{{ entry.id }}/answer">
+        {% for q in questions %}
+        <div class="q">
+          <label for="a{{ loop.index0 }}">{{ q }}</label>
+          <input id="a{{ loop.index0 }}" name="answer_{{ loop.index0 }}"
+                 placeholder="Leave blank to skip">
+        </div>
+        {% endfor %}
+        <button class="btn" type="submit">Answer and read again</button>
+      </form>
+    </div>
+    {% endif %}
+
     {% if changes %}
+    <p class="note" style="margin-bottom:var(--s-3)">
+      Every value below is editable. Correct anything that is off before you
+      tick it — what you type is what gets written, and the record keeps both
+      versions so a proposal you keep having to fix is visible later.
+    </p>
     <form method="post" action="/ui/log/{{ entry.id }}/apply">
       {% for c in changes %}
       <div class="chg">
@@ -172,7 +213,27 @@
           {% if c.mode != 'append' %}
             <div class="was">{% if c.current %}{{ c.current }}{% else %}<span class="empty">empty</span>{% endif %}</div>
           {% endif %}
-          <div class="now">{{ c.value }}</div>
+          {# Editable, and with the control the field deserves: a picklist
+             cannot be mistyped into a value that does not exist, and a date
+             picker cannot produce an ambiguous 09/10/26. Whatever comes back
+             still goes through the same validator the model's answer did. #}
+          {% if c.field == 'stage' %}
+            <select class="now edit" name="value_{{ c.key }}">
+              {% for s in stages %}
+              <option value="{{ s }}" {% if s == c.value %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          {% elif c.field == 'lost_category' %}
+            <select class="now edit" name="value_{{ c.key }}">
+              {% for lc in lost_categories %}
+              <option value="{{ lc }}" {% if lc == c.value %}selected{% endif %}>{{ lc }}</option>
+              {% endfor %}
+            </select>
+          {% elif c.field in date_fields %}
+            <input class="now edit" type="date" name="value_{{ c.key }}" value="{{ c.value }}">
+          {% else %}
+            <textarea class="now edit" name="value_{{ c.key }}" rows="2">{{ c.value }}</textarea>
+          {% endif %}
           {% if c.mode == 'append' %}
             <p class="why">Added above what's already there — nothing is replaced.</p>
           {% endif %}
