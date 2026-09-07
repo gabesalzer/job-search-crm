@@ -2797,32 +2797,59 @@ def _log_applications(db: Session) -> List[dict]:
     return rows
 
 
-def _propose_from_note(db: Session, note: str, *, origin: str
-                       ) -> models.LogEntry:
-    """Read one note and store what it proposes. Writes nothing to the record.
+# What a log entry's status means. Four states rather than two, because
+# "pending" was doing the work of three and the difference is what you are
+# supposed to do next:
+#
+#   pending   -- read fine, changes are waiting for you to tick boxes.
+#   failed    -- never read at all. Needs a retry, not a review.
+#   nothing   -- read fine, and there was nothing in it to record.
+#   applied / discarded -- resolved.
+#
+# Collapsing the middle two into "pending" produced a loop: a note that could
+# not be read appeared under "Waiting on you", whose only button took you to a
+# review screen with nothing on it to act on. A status that cannot tell "you
+# have work to do" from "the API was down" sends you to the wrong screen every
+# time -- the same collapse-two-causes-into-one bug as the forecast panel's
+# "no rated threads" message.
+STATUS_PENDING = "pending"
+STATUS_FAILED = "failed"
+STATUS_NOTHING = "nothing"
 
-    Always returns a LogEntry, including on failure: a note that could not be
-    read is still a note you said, and losing it because the API was down would
-    be the worst possible failure for a capture tool. The entry carries the
-    error in `rejected` and stays `pending`, so it can be retried.
+
+def _read_into(db: Session, entry: models.LogEntry) -> models.LogEntry:
+    """Read `entry.text` and record what it proposes. Writes nothing to the record.
+
+    Separated from creation so a retry re-reads the note already stored rather
+    than making a second entry. Re-dictating a note you already said is the one
+    thing a capture tool must never ask for, and before this existed it was the
+    only way to recover from a failed call.
+
+    Every field the previous attempt wrote is cleared first, so a retry that
+    succeeds does not leave last time's error sitting under this time's answer.
     """
-    entry = models.LogEntry(text=note, origin=origin, status="pending")
-    db.add(entry)
+    entry.prose = None
+    entry.proposal = None
+    entry.unmatched = None
+    entry.rejected = None
+    entry.model = None
+    entry.usage = None
+    entry.application_id = None
 
-    if not llm.enabled():
-        entry.rejected = json.dumps(
-            ["Reading notes is off — no ANTHROPIC_API_KEY is set. The note was "
-             "kept."])
+    def failed(message: str) -> models.LogEntry:
+        entry.status = STATUS_FAILED
+        entry.rejected = json.dumps([message])
         db.commit()
         return entry
+
+    if not llm.enabled():
+        return failed("Reading notes is off — no ANTHROPIC_API_KEY is set. "
+                      "The note was kept.")
 
     apps = _log_applications(db)
     if not apps:
-        entry.rejected = json.dumps(
-            ["There are no open applications for a note to update. The note "
-             "was kept."])
-        db.commit()
-        return entry
+        return failed("There are no open applications for a note to update. "
+                      "The note was kept.")
 
     # One `today` for the whole read, used for both the prompt and the sanity
     # check, so a note submitted across midnight cannot be told one date and
@@ -2836,20 +2863,15 @@ def _propose_from_note(db: Session, note: str, *, origin: str
                                   categories=LOST_CATEGORY_VALUES,
                                   today=today.isoformat(),
                                   definitions=_definition_overrides(db)),
-            logspec.build_messages(logspec.build_packet(apps, note)),
+            logspec.build_messages(logspec.build_packet(apps, entry.text)),
             max_tokens=logspec.MAX_TOKENS,
             timeout=90,
             usage_out=usage,
         )
     except llm.LLMError as exc:
-        entry.rejected = json.dumps([str(exc)])
-        db.commit()
-        return entry
+        return failed(str(exc))
     except Exception as exc:  # noqa: BLE001 -- the note must survive anything
-        entry.rejected = json.dumps(
-            ["Reading the note failed unexpectedly: {}".format(exc)])
-        db.commit()
-        return entry
+        return failed("Reading the note failed unexpectedly: {}".format(exc))
 
     prose, block = logspec.extract_block(text)
     changes, unmatched, rejected = logspec.parse(
@@ -2862,12 +2884,29 @@ def _propose_from_note(db: Session, note: str, *, origin: str
     entry.rejected = json.dumps(rejected) if rejected else None
     entry.model = model_used
     entry.usage = json.dumps(usage) if usage else None
+    # A read that produced nothing to apply is finished, not waiting. Leaving
+    # it pending parked chatter under "Waiting on you" forever.
+    entry.status = STATUS_PENDING if changes else STATUS_NOTHING
     # The convenience link, set only when the whole note is about one record.
     # See LogEntry's docstring for why this is not the authoritative one.
     touched = {c["application_id"] for c in changes}
     entry.application_id = touched.pop() if len(touched) == 1 else None
     db.commit()
     return entry
+
+
+def _propose_from_note(db: Session, note: str, *, origin: str
+                       ) -> models.LogEntry:
+    """Store a note, then read it. Always returns an entry, even on failure.
+
+    The note is written before the call on purpose: a note that could not be
+    read is still a note you said, and losing it because the API was down would
+    be the worst possible failure for a capture tool.
+    """
+    entry = models.LogEntry(text=note, origin=origin, status=STATUS_FAILED)
+    db.add(entry)
+    db.flush()
+    return _read_into(db, entry)
 
 
 def _apply_changes(db: Session, entry: models.LogEntry,
@@ -2935,7 +2974,13 @@ def _log_context(db: Session, entry: Optional[models.LogEntry] = None,
     recent = [r for r in recent if entry is None or r.id != entry.id][:LOG_HISTORY]
     pending = (
         db.query(models.LogEntry)
-        .filter(models.LogEntry.status == "pending")
+        .filter(models.LogEntry.status == STATUS_PENDING)
+        .order_by(models.LogEntry.created_at.desc())
+        .all()
+    )
+    unread = (
+        db.query(models.LogEntry)
+        .filter(models.LogEntry.status == STATUS_FAILED)
         .order_by(models.LogEntry.created_at.desc())
         .all()
     )
@@ -2950,6 +2995,10 @@ def _log_context(db: Session, entry: Optional[models.LogEntry] = None,
         # of the page rather than in the history, because a pending change is
         # work waiting on you and history is not.
         "pending": [p for p in pending if entry is None or p.id != entry.id],
+        # Notes that were never read. Kept separate from `pending` because the
+        # action is different: these need a retry, not a decision.
+        "unread": [u for u in unread if entry is None or u.id != entry.id],
+        "failed": bool(entry) and entry.status == STATUS_FAILED,
         "enabled": llm.enabled(),
         "error": error,
         "applied": applied,
@@ -3005,6 +3054,20 @@ def log_discard(entry_id: int, db: Session = Depends(get_db)):
     entry = _get_or_404(db, models.LogEntry, entry_id)
     _apply_changes(db, entry, set())
     return RedirectResponse(url="/log", status_code=303)
+
+
+@router.post("/ui/log/{entry_id}/retry")
+def log_retry(entry_id: int, db: Session = Depends(get_db)):
+    """Read a stored note again, in place.
+
+    Re-reads the same entry rather than creating a second one, so retrying a
+    note does not litter the history with duplicates of something you said
+    once — and so the double-entry check the history exists for keeps working.
+    """
+    entry = _get_or_404(db, models.LogEntry, entry_id)
+    _read_into(db, entry)
+    return RedirectResponse(
+        url="/log?entry_id={}".format(entry.id), status_code=303)
 
 
 @router.post("/ui/log/{entry_id}/delete")

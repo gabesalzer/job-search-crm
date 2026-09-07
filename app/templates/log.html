@@ -58,6 +58,9 @@
   .pill.applied{background:#f0fdf4;color:#15803d;border:1px solid #86efac}
   .pill.pending{background:var(--accent-soft);color:var(--accent);
     border:1px solid var(--accent)}
+  .pill.failed{background:#fef2f2;color:var(--down);border:1px solid #fca5a5}
+  .pill.nothing{background:var(--bg);color:var(--neutral);
+    border:1px solid var(--line-strong)}
   .pill.discarded{background:var(--bg);color:var(--neutral);
     border:1px solid var(--line-strong)}
 </style>
@@ -102,10 +105,13 @@
   <!-- ------------------------------------------------------------------ -->
   {% if entry %}
   <div class="log-sec">
-    <h2>What it heard</h2>
+    <h2>{% if failed %}Couldn&#39;t read this one{% else %}What it heard{% endif %}</h2>
     <p class="note">
-      {% if entry.prose %}{{ entry.prose }}{% else %}
-      Nothing was proposed from this note.{% endif %}
+      {% if failed %}
+        The note was stored but never read, so nothing was proposed — which is
+        a different thing from having read it and found nothing in it.
+      {% elif entry.prose %}{{ entry.prose }}
+      {% else %}Read fine, and there was nothing in it to record.{% endif %}
     </p>
     <div class="said">{{ entry.text }}</div>
 
@@ -120,6 +126,33 @@
         <strong>Couldn't place:</strong>
         <ul>{% for u in unmatched %}<li>{{ u }}</li>{% endfor %}</ul>
       </div>
+    {% endif %}
+
+    {% if failed %}
+    <div class="actions">
+      <form method="post" action="/ui/log/{{ entry.id }}/retry">
+        <button class="btn" type="submit">Read it again</button>
+      </form>
+      <form method="post" action="/ui/log/{{ entry.id }}/delete"
+            onsubmit="return confirm('Delete this note? What you said goes with it.')">
+        <button class="btn secondary" type="submit">Delete this note</button>
+      </form>
+      <p class="why" style="flex:1 1 280px">
+        Your words are stored. Nothing was read, so nothing was proposed —
+        fix whatever the error names and read it again rather than dictating
+        it a second time.
+      </p>
+    </div>
+    {% elif not changes %}
+    <div class="actions">
+      <form method="post" action="/ui/log/{{ entry.id }}/retry">
+        <button class="btn secondary" type="submit">Read it again</button>
+      </form>
+      <form method="post" action="/ui/log/{{ entry.id }}/delete"
+            onsubmit="return confirm('Delete this note? What you said goes with it.')">
+        <button class="btn secondary" type="submit">Delete this note</button>
+      </form>
+    </div>
     {% endif %}
 
     {% if changes %}
@@ -154,6 +187,29 @@
       </div>
     </form>
     {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- ------------------------------------------------------------------ -->
+  {% if unread %}
+  <div class="log-sec">
+    <h2>Couldn&#39;t be read</h2>
+    <p class="note">
+      Notes that were stored but never read — usually the API was unreachable
+      when you said them. Nothing in them has touched a record, and your words
+      are intact.
+    </p>
+    {% for u in unread %}
+    <div class="panel" style="padding:var(--s-4);margin-bottom:var(--s-3)">
+      <div class="said" style="margin-bottom:var(--s-3)">{{ u.text }}</div>
+      <div class="actions" style="margin-top:0">
+        <form method="post" action="/ui/log/{{ u.id }}/retry">
+          <button class="btn" type="submit">Read it again</button>
+        </form>
+        <a class="btn secondary" href="/log?entry_id={{ u.id }}">Open</a>
+      </div>
+    </div>
+    {% endfor %}
   </div>
   {% endif %}
 

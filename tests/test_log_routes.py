@@ -344,8 +344,41 @@ with SessionLocal() as db:
     row = db.get(models.LogEntry, entry)
 check("a note whose read failed is still stored",
       "while the API was down" in row.text)
-check("...stays pending so it can be retried", row.status == "pending")
+check("...is marked failed, not pending — it needs a retry, not a decision",
+      row.status == "failed")
 check("...and carries the error", "500" in (row.rejected or ""))
+
+page = client.get("/log?entry_id={}".format(entry))
+check("a failed note offers a retry where you are looking",
+      "/ui/log/{}/retry".format(entry) in page.text)
+check("...and a delete, so a dead note is not stuck on the page",
+      "/ui/log/{}/delete".format(entry) in page.text)
+check("it is listed under couldn't-be-read rather than waiting-on-you",
+      "Couldn&#39;t be read" in client.get("/log").text)
+
+# The point of storing the text: recovery without re-dictating.
+say([{"application": CONDOR, "field": "process",
+      "value": "Panel, then a final with the CEO", "why": "described the loop"}])
+client.post("/ui/log/{}/retry".format(entry), follow_redirects=False)
+with SessionLocal() as db:
+    row = db.get(models.LogEntry, entry)
+check("retrying re-reads the stored note", row.status == "pending")
+check("...against the same text, not a re-dictation",
+      "while the API was down" in row.text)
+check("...and clears the previous attempt's error", not row.rejected)
+check("...without creating a second entry",
+      len(json.loads(row.proposal or "[]")) == 1)
+client.post("/ui/log/{}/discard".format(entry), follow_redirects=False)
+
+say([])
+entry = submit("Just thinking out loud, nothing to record here.")
+with SessionLocal() as db:
+    row = db.get(models.LogEntry, entry)
+check("a note read fine with nothing in it is finished, not waiting",
+      row.status == "nothing")
+check("...so it never appears under waiting on you",
+      "Just thinking out loud" not in
+      client.get("/log").text.split("Recent notes")[0])
 
 _reply["text"] = "no fenced block here at all"
 entry = submit("A note the model answered in prose.")

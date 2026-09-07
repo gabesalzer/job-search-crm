@@ -376,8 +376,8 @@ LOG_ENTRY = SimpleNamespace(
 
 LOG_BASE = {
     "active": "log", "entry": None, "changes": [], "unmatched": [],
-    "rejected": [], "recent": [], "pending": [], "enabled": True,
-    "error": "", "applied": "",
+    "rejected": [], "recent": [], "pending": [], "unread": [], "failed": False,
+    "enabled": True, "error": "", "applied": "",
 }
 
 cases = [
@@ -1074,6 +1074,19 @@ cases = [
         "recent": [SimpleNamespace(
             id=9, text="Voice memo from the walk home about Condor.",
             status="pending", origin="api", created_at=NOW, prose=None)],
+    }),
+    # A note that could not be read at all. Must offer a retry and a delete
+    # rather than leaving you on a screen with nothing to act on.
+    ("log.html (note that failed to read)", {
+        **LOG_BASE,
+        "entry": SimpleNamespace(**{**LOG_ENTRY.__dict__, "status": "failed",
+                                    "prose": None}),
+        "failed": True,
+        "rejected": ["API returned 400: This API key is not scoped to a "
+                     "workspace."],
+        "unread": [SimpleNamespace(
+            id=12, text="An older note from while the API was down.",
+            status="failed", origin="web", created_at=NOW, prose=None)],
     }),
     # No key set: notes are still kept, but nothing is read from them.
     ("log.html (reading disabled)", {**LOG_BASE, "enabled": False}),
