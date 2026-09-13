@@ -281,6 +281,20 @@ def _naive_utc(value: Optional[datetime]) -> Optional[datetime]:
 
 CLOSED_STAGES = (models.Stage.CLOSED_WON, models.Stage.CLOSED_LOST)
 
+# Lives here rather than with the postings routes because `_company_website`
+# does, and that is the only thing that reads it. Splitting the two is exactly
+# what broke posting creation: the helper moved into shared and its constant
+# stayed behind, so every POST raised NameError -- which the auth middleware
+# then disguised as a login prompt.
+# Job-board / ATS domains — for these, the posting URL's domain is the board,
+# not the employer, so we don't infer a company website from it.
+_ATS_DOMAINS = (
+    "greenhouse.io", "lever.co", "ashbyhq.com", "myworkdayjobs.com", "workday.com",
+    "linkedin.com", "indeed.com", "glassdoor.com", "jobvite.com", "smartrecruiters.com",
+    "bamboohr.com", "breezy.hr", "workable.com", "icims.com", "teamtailor.com",
+)
+
+
 def _company_website(source_url: Optional[str]) -> Optional[str]:
     """Infer a company website from a posting URL.
 
@@ -516,6 +530,7 @@ def _definition_rows(db: Session) -> List[dict]:
 
 
 __all__ = [
+    "_ATS_DOMAINS",
     "APPLICATION_SOURCE_VALUES",
     "CLOSED_STAGES",
     "COMPANY_TYPES",

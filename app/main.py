@@ -65,20 +65,40 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in self.OPEN_PATHS:
             return await call_next(request)  # e.g. Render's /health probe
         username = os.getenv("APP_USERNAME", "gabe")
+        if not self._authorised(request, username, password):
+            return Response(
+                "Authentication required.",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="Job Search CRM"'},
+            )
+        # Deliberately outside the credential check's try/except. It used to be
+        # inside it, which meant `except Exception: pass` swallowed anything the
+        # route raised and fell through to the 401 below -- so every server
+        # error in the app presented as a login prompt that then "rejected"
+        # correct credentials, because re-submitting them just re-ran the
+        # failing route. It hid a NameError in posting creation for days and
+        # would have hidden the next one too. A crash must look like a crash.
+        return await call_next(request)
+
+    @staticmethod
+    def _authorised(request: Request, username: str, password: str) -> bool:
+        """Whether this request carries the right Basic credentials.
+
+        The broad `except` belongs here and only here: a malformed or
+        non-UTF-8 Authorization header is a failed login, not a server error.
+        Keeping it wrapped around nothing else is what stops it catching
+        exceptions it has no business catching.
+        """
         header = request.headers.get("Authorization", "")
-        if header.startswith("Basic "):
-            try:
-                decoded = base64.b64decode(header[6:]).decode("utf-8")
-                user, _, pw = decoded.partition(":")
-                if secrets.compare_digest(user, username) and secrets.compare_digest(pw, password):
-                    return await call_next(request)
-            except Exception:
-                pass
-        return Response(
-            "Authentication required.",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Job Search CRM"'},
-        )
+        if not header.startswith("Basic "):
+            return False
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8")
+        except Exception:  # noqa: BLE001 -- a bad header is a failed login
+            return False
+        user, _, pw = decoded.partition(":")
+        return (secrets.compare_digest(user, username)
+                and secrets.compare_digest(pw, password))
 
 
 app.add_middleware(BasicAuthMiddleware)

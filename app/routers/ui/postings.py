@@ -47,14 +47,6 @@ def postings_page(request: Request, db: Session = Depends(get_db)):
         "companies": db.query(models.Company).order_by(models.Company.name).all(),
     })
 
-# Job-board / ATS domains — for these, the posting URL's domain is the board,
-# not the employer, so we don't infer a company website from it.
-_ATS_DOMAINS = (
-    "greenhouse.io", "lever.co", "ashbyhq.com", "myworkdayjobs.com", "workday.com",
-    "linkedin.com", "indeed.com", "glassdoor.com", "jobvite.com", "smartrecruiters.com",
-    "bamboohr.com", "breezy.hr", "workable.com", "icims.com", "teamtailor.com",
-)
-
 @router.post("/ui/postings")
 def create_posting_ui(
     company_name: str = Form(...),
